@@ -1,0 +1,136 @@
+package com.openrad.mobile.engine
+
+/** Immutable engine snapshot published to the UI. Mirrors `runtime.rs::Snapshot`. */
+data class EngineState(
+    val phase: Phase = Phase.STOPPED,
+    val error: String? = null,
+    val rid: Long? = null,
+    val vip: Int? = null,
+    val nodeName: String? = null,
+    val networks: List<NetworkView> = emptyList(),
+    val peers: List<PeerView> = emptyList(),
+    val traffic: TrafficView = TrafficView(),
+    val latencyMs: Long = 0,
+    val forceRelay: Boolean = false,
+    val retryQueued: Int = 0,
+    val retryActive: Int = 0,
+    val pendingIncoming: Int = 0,
+) {
+    enum class Phase { STOPPED, PROVISIONING, CONNECTING, ONLINE, RECONNECTING, ERROR }
+}
+
+data class NetworkView(
+    val networkId: String,
+    val name: String,
+    /** 0 = awaiting approval, 1 = member, 2 = owner/admin, null = unknown. */
+    val ownRole: Long?,
+    val memberCount: Int,
+)
+
+enum class LinkState { IDLE, QUEUED, CONNECTING, CONNECTED, FAILED, REFUSED, OFFLINE, UNAVAILABLE }
+
+data class PeerView(
+    val rid: Long,
+    val name: String,
+    val vip: Int,
+    val networkIds: Set<String>,
+    val link: LinkState,
+    val detail: String = "",
+    val transport: TransportPath? = null,
+    val endpoint: String? = null,
+)
+
+data class TrafficView(
+    val sentBytes: Long = 0,
+    val receivedBytes: Long = 0,
+    val sentFrames: Long = 0,
+    val receivedFrames: Long = 0,
+    val dropped: Long = 0,
+)
+
+data class EngineConfig(
+    val host: String = Protocol.DEFAULT_HOST,
+    val port: Int = Protocol.DEFAULT_PORT,
+    val nodeName: String = "openrad-android",
+    val forceRelay: Boolean = false,
+    val autoReconnect: Boolean = true,
+    val reconnectAttempts: Int = 3,
+    val reconnectBaseDelaySeconds: Int = 2,
+    val outgoingBroadcasts: Boolean = true,
+    /** Stealth-blocked virtual addresses (IPv4 as Int); applied live by [Engine.updateConfig]. */
+    val blocked: Map<Int, BlockDirection> = emptyMap(),
+    /** Public RSA modulus of the coordination service; overridden only by tests. */
+    val modulus: ByteArray = Protocol.SERVER_MODULUS,
+)
+
+/**
+ * Stealth block: which directions of a virtual address's traffic are discarded while the
+ * authenticated channel (keepalives, RTT) stays up. Mirrors `runtime.rs::BlockDirection`.
+ */
+enum class BlockDirection(val wire: String) {
+    BOTH("both"),
+    INCOMING("incoming"),
+    OUTGOING("outgoing"),
+    ;
+
+    val incoming: Boolean get() = this != OUTGOING
+    val outgoing: Boolean get() = this != INCOMING
+
+    companion object {
+        const val MAX_ADDRESSES = 1024
+
+        fun fromWire(value: String): BlockDirection? = entries.firstOrNull { it.wire == value }
+
+        /** Same rule as `runtime.rs::validate_block_address`: only a possible peer unicast VIP. */
+        fun validAddress(ip: Int): Boolean =
+            ip != 0 && ip != -1 && !Ip.isMulticast(ip) && (ip ushr 24) != 127
+    }
+}
+
+/** Durable identity storage. Android uses an encrypted store; tests use memory. */
+interface IdentityStore {
+    fun load(): Identity?
+    fun save(identity: Identity)
+    /** Must be durable before the registering Login can be sent. */
+    fun markRegistrationPending()
+    fun clear()
+}
+
+class RegistrationPendingException : java.io.IOException(
+    "registration outcome unknown; recover the issued identity or explicitly reset it before registering again",
+)
+
+class MemoryIdentityStore(private var identity: Identity? = null) : IdentityStore {
+    private var pending = false
+    @Synchronized override fun load(): Identity? {
+        if (identity == null && pending) throw RegistrationPendingException()
+        return identity
+    }
+    @Synchronized override fun save(identity: Identity) {
+        this.identity = identity
+        pending = false
+    }
+    @Synchronized override fun markRegistrationPending() {
+        check(identity == null) { "an identity was saved while preparing registration" }
+        pending = true
+    }
+    @Synchronized override fun clear() {
+        identity = null
+        pending = false
+    }
+}
+
+interface EngineListener {
+    fun onState(state: EngineState) {}
+    fun onEvent(message: String, error: Boolean) {}
+    /** Validated inbound IPv4 packet for the TUN. */
+    fun onPacket(packet: ByteArray) {}
+}
+
+/** Outcome of an asynchronous engine command. */
+sealed class CommandResult {
+    data class Listing(val query: String, val networks: List<Pair<String, Long>>, val cursor: Long) : CommandResult()
+    data class Network(val outcome: NetworkOperation.Outcome) : CommandResult()
+    data class Rtt(val rid: Long, val millis: Double) : CommandResult()
+    data class Failed(val message: String) : CommandResult()
+}

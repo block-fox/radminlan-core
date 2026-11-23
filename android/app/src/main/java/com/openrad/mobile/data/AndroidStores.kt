@@ -1,0 +1,108 @@
+package com.openrad.mobile.data
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import com.openrad.mobile.engine.Identity
+import com.openrad.mobile.engine.IdentityStore
+import com.openrad.mobile.engine.RegistrationPendingException
+import com.openrad.mobile.model.AppSettings
+import com.openrad.mobile.model.JoinConfiguration
+
+/**
+ * Identity in Android Keystore-backed [EncryptedSharedPreferences]. The
+ * credential is never written in clear text nor logged. If the Keystore is
+ * unavailable the store fails closed instead of falling back to plain storage.
+ */
+class EncryptedIdentityStore(context: Context) : IdentityStore {
+    private val prefs: SharedPreferences by lazy {
+        val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        EncryptedSharedPreferences.create(
+            context,
+            FILE,
+            key,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+    }
+
+    @Synchronized override fun load(): Identity? {
+        val text = prefs.getString(KEY, null) ?: return null
+        if (text == PENDING) throw RegistrationPendingException()
+        return try {
+            Codecs.decodeIdentity(text)
+        } catch (e: Exception) {
+            // Keep the unreadable value for repair; never register a second device silently.
+            throw IllegalStateException("stored identity is unreadable; reset it in Settings to register again", e)
+        }
+    }
+
+    @Synchronized override fun save(identity: Identity) {
+        check(prefs.edit().putString(KEY, Codecs.encodeIdentity(identity)).commit()) { "could not save identity" }
+    }
+
+    @Synchronized override fun markRegistrationPending() {
+        val current = prefs.getString(KEY, null)
+        check(current == null || current == PENDING) { "an identity was saved while preparing registration" }
+        check(prefs.edit().putString(KEY, PENDING).commit()) { "could not save registration intent" }
+    }
+
+    @Synchronized override fun clear() {
+        check(prefs.edit().remove(KEY).commit()) { "could not clear identity" }
+    }
+
+    companion object {
+        private const val FILE = "openrad_identity"
+        private const val KEY = "identity"
+        private const val PENDING = "openrad-registration-pending-v1"
+    }
+}
+
+/** Settings, favorites and join configurations (no secrets). Corrupt values are kept for repair. */
+class PreferencesStore(context: Context) {
+    private val prefs = context.getSharedPreferences("openrad_preferences", Context.MODE_PRIVATE)
+
+    // SharedPreferences publishes a commit to its process cache before the disk result is known.
+    // Readers share this lock with saveString so they never observe a value that is rolled back.
+    private fun <T> read(key: String, default: T, decode: (String) -> T): T = synchronized(LOCK) {
+        val raw = prefs.getString(key, null) ?: return default
+        return try {
+            decode(raw)
+        } catch (e: Exception) {
+            Log.w(TAG, "preference '$key' is corrupt; kept as '$key.corrupt'")
+            prefs.edit().putString("$key.corrupt", raw).remove(key).apply()
+            default
+        }
+    }
+
+    fun settings(): AppSettings = read(SETTINGS, AppSettings(), Codecs::decodeSettings)
+
+    private fun saveString(key: String, value: String): Boolean = synchronized(LOCK) {
+        commitPreferenceString(value,
+            { prefs.getString(key, null) },
+            { previous -> prefs.edit().putString(key, previous).commit() })
+    }
+
+    fun saveSettings(value: AppSettings): Boolean = saveString(SETTINGS, Codecs.encodeSettings(value))
+
+    fun favorites(): Set<String> = read(FAVORITES, emptySet(), Codecs::decodeFavorites)
+
+    fun saveFavorites(value: Set<String>): Boolean = saveString(FAVORITES, Codecs.encodeFavorites(value))
+
+    fun configurations(): List<JoinConfiguration> = read(CONFIGS, emptyList(), Codecs::decodeConfigurations)
+
+    fun saveConfigurations(value: List<JoinConfiguration>): Boolean =
+        saveString(CONFIGS, Codecs.encodeConfigurations(value))
+
+    fun hasCorruptValues(): Boolean = prefs.all.keys.any { it.endsWith(".corrupt") }
+
+    companion object {
+        private const val TAG = "OpenRad"
+        private val LOCK = Any()
+        private const val SETTINGS = "settings"
+        private const val FAVORITES = "favorites"
+        private const val CONFIGS = "join_configurations"
+    }
+}

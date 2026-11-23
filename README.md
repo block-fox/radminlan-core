@@ -40,7 +40,7 @@ The build verifies the JAR identity and copies only the core classes and its lic
 
 - Windows uses the official-compatible service backend by default, with optional embedded core mode.
 - Linux and macOS use the embedded in-process engine and loopback game forwarding.
-- Android will use the same protocol and identity model through a `VpnService`/TUN adapter. This repository does not yet ship the Android adapter.
+- Android uses a separate `VpnService` companion with the same Radmin-compatible protocol and a device-local identity. See `android/README.md`.
 - Apple mobile support requires a Network Extension packet-tunnel target and entitlements. This repository does not yet ship that target.
 - A native TUN/TAP adapter can be added later without changing the control, membership, or peer engine APIs.
 
