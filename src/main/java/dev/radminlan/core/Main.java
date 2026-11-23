@@ -18,7 +18,8 @@ public final class Main {
             Usage: radminlan-core [--profile DIRECTORY] [--network NAME]... [connect]
             Starts an interactive CLI. Include connect to start the session immediately.
             Commands: connect, disconnect, status, networks, public, join NAME,
-                      create NAME, leave ID, delete ID, enable ID, disable ID, forward IP:PORT, quit.
+                      create NAME, leave ID, delete ID, enable ID, disable ID,
+                      forward IP:PORT, tun NAME HELPER, untun, quit.
             Private network passwords are read from the terminal without echo.
             """;
 
@@ -40,7 +41,9 @@ public final class Main {
         try (var session = new CoreSession(profile, networks, System.err::println);
              var listener = new TcpForwarder(session);
              var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+            var tun = new java.util.concurrent.atomic.AtomicReference<TunProcess>();
             Thread cleanup = new Thread(() -> {
+                closeTun(tun);
                 listener.close();
                 session.close();
                 try { session.awaitStopped(Duration.ofSeconds(10)); }
@@ -60,14 +63,25 @@ public final class Main {
                             case "" -> { }
                             case "quit", "exit" -> { return; }
                             case "connect" -> System.out.println(session.start() ? "Connecting" : "Session busy");
-                            case "disconnect" -> { listener.cancelAll(); session.stop(); }
+                            case "disconnect" -> { closeTun(tun); listener.cancelAll(); session.stop(); }
                             case "status" -> System.out.println(session.view().status());
                             case "networks" -> session.view().networks().forEach(n -> System.out.printf("%s\t%s\t%d members%n", n.id(), n.name(), n.peers().size()));
                             case "public" -> {
                                 if (!session.catalogReady()) System.out.println("Public catalog unavailable");
                                 else session.publicNetworks().forEach(System.out::println);
                             }
+                            case "tun" -> {
+                                String[] options = target.split("\\s+", 2);
+                                if (options.length != 2) throw new IllegalArgumentException("Expected NAME HELPER");
+                                if (tun.get() != null && tun.get().active()) throw new IllegalStateException("A TUN is already attached");
+                                closeTun(tun);
+                                listener.cancelAll();
+                                tun.set(TunProcess.open(session, Path.of(options[1]), options[0]));
+                                System.out.println("TUN attached: " + options[0]);
+                            }
+                            case "untun" -> closeTun(tun);
                             case "forward" -> {
+                                if (tun.get() != null && tun.get().active()) throw new IllegalStateException("Packets use the attached TUN");
                                 int separator = target.lastIndexOf(':');
                                 if (separator < 1) throw new IllegalArgumentException("Expected IP:PORT");
                                 var ip = CoreSession.virtualAddress(target.substring(0, separator));
@@ -87,6 +101,11 @@ public final class Main {
                 cleanup.run();
             }
         }
+    }
+
+    private static void closeTun(java.util.concurrent.atomic.AtomicReference<TunProcess> holder) {
+        TunProcess current = holder.getAndSet(null);
+        if (current != null) current.close();
     }
 
     private static void manage(CoreSession session, String command, String target) throws Exception {

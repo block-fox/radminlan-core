@@ -20,6 +20,16 @@ jobs:
       - if: runner.os == 'Windows'
         run: .\gradlew.bat build --no-daemon
       - run: java -jar build/libs/radminlan-core-0.1.0.jar --help
+      - if: runner.os == 'Linux'
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -O2 platform/linux/tun.c -o build/radminlan-tun
+          sudo unshare --net python3 platform/linux/smoke.py build/radminlan-tun
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: radminlan-tun-linux-x64
+          path: build/radminlan-tun
+          if-no-files-found: error
   android:
     runs-on: ubuntu-latest
     steps:

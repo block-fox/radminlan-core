@@ -1,6 +1,9 @@
 package dev.radminlan.vendor.openradclient;
 
+import dev.radminlan.core.Ipv4Link;
 import dev.radminlan.vendor.openradclient.virtual.OutboundTcpStack;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import dev.radminlan.vendor.openradplugin.crypto.Identity;
 import dev.radminlan.vendor.openradplugin.network.Membership;
 import dev.radminlan.vendor.openradplugin.peer.*;
@@ -40,6 +43,7 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
     private final Condition changed = changeLock.newCondition();
     private final LanServerRegistry lan = new LanServerRegistry();
     private final OutboundTcpStack stack;
+    private final Supplier<Consumer<byte[]>> packetReceiver;
     private volatile Map<Long, PeerAuthorization.Grant> authorized = Map.of();
     /** Same grants indexed by VIP for the per-frame send path; republished with authorized. */
     private volatile Map<Inet4Address, PeerAuthorization.Grant> authorizedByVip = Map.of();
@@ -49,11 +53,13 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
     private record Attempt(int failures, long retryAt, long lastStarted) {}
 
     ClientPeerService(Identity identity, Attachment attachment, ClientConfig config,
-                      CoordinatorEndpoint coordinator, AcceptorRelayGuard relayGuard) {
+                      CoordinatorEndpoint coordinator, AcceptorRelayGuard relayGuard,
+                      Supplier<Consumer<byte[]>> packetReceiver) {
         this.identity = identity;
         this.attachment = attachment;
         this.coordinator = coordinator;
         this.relayGuard = relayGuard;
+        this.packetReceiver = packetReceiver;
         this.maxPeers = config.maxPeers();
         this.transports = transports(config);
         this.selectedNames = Set.copyOf(config.networks());
@@ -233,6 +239,21 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         }
     }
 
+    boolean sendIpv4(byte[] packet) {
+        Inet4Address destination = Ipv4Link.destination(packet, attachment.vip());
+        if (destination == null || closed.get()) return false;
+        PeerAuthorization.Grant grant = authorizedByVip.get(destination);
+        if (grant == null) return false;
+        PeerWorker worker = workers.get(grant.peer().rid());
+        PeerChannel channel = worker == null ? null : worker.channel;
+        if (channel == null || !worker.authorized()) return false;
+        try { return worker.offer(Ipv4Link.outbound(packet, attachment.vip(), channel.peerMac())); }
+        catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     private void sendFrame(Inet4Address destination, byte[] frame) throws IOException {
         if (closed.get()) throw new IOException("OpenRad session closed");
         PeerAuthorization.Grant grant = authorizedByVip.get(destination);
@@ -351,8 +372,14 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                             // Freshly decoded arrays owned by this worker alone: no defensive copies.
                             for (byte[] frame : batch.ownedFrames()) {
                                 if (!authorized()) break;
-                                if (!lan.accept(grant.peer().vip(), peerMac, frame))
+                                if (lan.accept(grant.peer().vip(), peerMac, frame)) continue;
+                                Consumer<byte[]> sink = packetReceiver.get();
+                                if (sink == null || frame.length >= 14 && frame[12] == 8 && frame[13] == 6) {
                                     stack.acceptEthernet(grant.peer().vip(), frame);
+                                } else {
+                                    byte[] ipv4 = Ipv4Link.inbound(frame, grant.peer().vip(), peerMac, attachment.vip());
+                                    if (ipv4 != null) sink.accept(ipv4);
+                                }
                             }
                         }
                     }

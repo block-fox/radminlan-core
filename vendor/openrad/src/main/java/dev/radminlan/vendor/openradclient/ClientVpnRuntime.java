@@ -74,6 +74,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private volatile Snapshot state = new Snapshot("OFFLINE", "", List.of(), 0, "");
     private volatile Thread thread;
     private volatile ClientPeerService peers;
+    private volatile Consumer<byte[]> packetReceiver;
     private volatile Set<String> activeNetworkNames = Set.of();
     private volatile CatalogSnapshot catalog = new CatalogSnapshot("OFFLINE", List.of(), Set.of(), List.of());
     private final AtomicLong lastIncomingRejectLog = new AtomicLong();
@@ -126,7 +127,24 @@ public final class ClientVpnRuntime implements AutoCloseable {
             throws IOException {
         ClientPeerService current = peers;
         if (current == null || stopped.get()) throw new IOException("OpenRad is not connected");
+        if (packetReceiver != null) throw new IOException("The system TUN owns this session's packets");
         return current.openTcp(destination, port, timeout);
+    }
+
+    public synchronized void attachPacketReceiver(Consumer<byte[]> receiver) {
+        Objects.requireNonNull(receiver);
+        if (packetReceiver != null || peers == null || !state.phase().equals("CONNECTED"))
+            throw new IllegalStateException("The connected session needs an unused packet receiver");
+        packetReceiver = receiver;
+    }
+
+    public synchronized void detachPacketReceiver(Consumer<byte[]> receiver) {
+        if (packetReceiver == receiver) packetReceiver = null;
+    }
+
+    public boolean sendIpv4(Consumer<byte[]> receiver, byte[] packet) {
+        ClientPeerService current = peers;
+        return packetReceiver == receiver && current != null && !stopped.get() && current.sendIpv4(packet);
     }
 
     private void own(ControlSession session) {
@@ -403,7 +421,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private void runConnected(Identity identity, Attachment connection, CoordinatorEndpoint coordinator,
                               AcceptorRelayGuard relayGuard) throws IOException {
         relayGuard.startAttachment();
-        try (ClientPeerService peerService = new ClientPeerService(identity, connection, config, coordinator, relayGuard)) {
+        try (ClientPeerService peerService = new ClientPeerService(identity, connection, config, coordinator, relayGuard, () -> packetReceiver)) {
             peers = peerService;
             Set<String> initialTargets = resolveNetworks(connection, peerService);
             var targets = new LinkedHashSet<>(initialTargets);

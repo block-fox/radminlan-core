@@ -45,6 +45,10 @@ public final class CoreSession implements AutoCloseable {
         return runtime.openTcp(peer, port, Duration.ofSeconds(20));
     }
 
+    void attachPacketReceiver(Consumer<byte[]> receiver) { runtime.attachPacketReceiver(receiver); }
+    void detachPacketReceiver(Consumer<byte[]> receiver) { runtime.detachPacketReceiver(receiver); }
+    boolean sendIpv4(Consumer<byte[]> receiver, byte[] packet) { return runtime.sendIpv4(receiver, packet); }
+
     public static Path defaultProfile() {
         return Path.of(System.getProperty("user.home"), ".radminlan", "core");
     }
