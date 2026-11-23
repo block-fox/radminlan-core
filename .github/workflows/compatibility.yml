@@ -81,3 +81,11 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: ./android/gradlew -p android :app:connectedDebugAndroidTest --no-daemon
+  apple-mobile:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: brew install xcodegen
+      - working-directory: ios
+        run: ./build.sh

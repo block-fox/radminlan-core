@@ -79,7 +79,7 @@ The build verifies the JAR identity and copies only the core classes and its lic
 - Windows uses the official-compatible service backend by default, with optional embedded core mode.
 - Linux and macOS can use the embedded engine for game TCP. Both have optional CLI system packet interfaces.
 - Android uses a separate `VpnService` companion with the same Radmin-compatible protocol and a device-local identity. See `android/README.md`.
-- Apple mobile support requires a Network Extension packet-tunnel target and entitlements. This repository does not yet ship that target.
+- iOS has a Packet Tunnel app and extension project. Installing it on a device requires Apple signing and provisioning. See `ios/README.md`.
 - Windows has a CLI Wintun system adapter. The embedded core can use process-level forwarding, and the existing service backend uses the official system adapter.
 
 ## Compatibility boundary

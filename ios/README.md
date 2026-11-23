@@ -1,0 +1,5 @@
+# iOS Packet Tunnel
+
+The iOS app and extension are built as a SwiftUI app plus an `NEPacketTunnelProvider`. A Rust Radmin-compatible engine from OpenRad commit `d4314faea60fb88d632e133e971edb01a630e039` is packaged as a static library inside the extension. `native/LICENSE` preserves upstream attribution. RadminLAN adds the bounded IPv4 packet bridge, session lifecycle, and app-to-extension management UI.
+
+On a Mac with Xcode, XcodeGen, and Rust installed, use `./build.sh` to build the unsigned simulator app. A simulator build only checks Swift and native library integration. On a physical iPhone, use `./build.sh device DEVELOPMENT_TEAM=<team-id> RADMINLAN_BUNDLE_ID=<your-unique-bundle-id>` with provisioning that grants the Network Extensions packet tunnel capability to both targets. The app uses its own profile and routes VPN IPv4 traffic through iOS when the user connects. Network membership is managed in the companion app.
