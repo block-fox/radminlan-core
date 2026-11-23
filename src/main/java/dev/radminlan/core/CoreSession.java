@@ -2,7 +2,6 @@ package dev.radminlan.core;
 
 import dev.radminlan.vendor.openradclient.ClientConfig;
 import dev.radminlan.vendor.openradclient.ClientVpnRuntime;
-import dev.radminlan.vendor.openradclient.ClientVpnRuntime.Action;
 import dev.radminlan.vendor.openradclient.ClientVpnRuntime.ManagementView;
 import dev.radminlan.vendor.openradclient.virtual.OutboundTcpStack;
 
@@ -19,6 +18,8 @@ import java.util.function.Consumer;
 
 /** A single, explicitly started VPN identity shared by the CLI and game adapters. */
 public final class CoreSession implements AutoCloseable {
+    public enum Action { JOIN, CREATE, LEAVE, DELETE, ENABLE, DISABLE }
+
     private final ClientVpnRuntime runtime;
 
     public CoreSession(Path profile, List<String> initialNetworks, Consumer<String> logger) {
@@ -34,7 +35,7 @@ public final class CoreSession implements AutoCloseable {
     }
     public boolean catalogReady() { return runtime.minecraftCatalog().state().startsWith("READY"); }
     public CompletableFuture<Boolean> manage(Action action, String target, char[] password) {
-        return runtime.manage(action, target, password);
+        return runtime.manage(ClientVpnRuntime.Action.valueOf(action.name()), target, password);
     }
 
     public OutboundTcpStack.Connection openTcp(Inet4Address peer, int port) throws IOException {

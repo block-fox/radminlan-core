@@ -1,6 +1,6 @@
 package dev.radminlan.core;
 
-import dev.radminlan.vendor.openradclient.ClientVpnRuntime.Action;
+import dev.radminlan.core.CoreSession.Action;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;

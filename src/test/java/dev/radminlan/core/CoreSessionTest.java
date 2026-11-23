@@ -1,6 +1,6 @@
 package dev.radminlan.core;
 
-import dev.radminlan.vendor.openradclient.ClientVpnRuntime.Action;
+import dev.radminlan.core.CoreSession.Action;
 import dev.radminlan.vendor.openradplugin.crypto.Identity;
 import dev.radminlan.vendor.openradplugin.protocol.TlvCodec;
 import dev.radminlan.vendor.openradplugin.session.CoordinatorEndpoint;

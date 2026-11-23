@@ -46,7 +46,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
             networks = List.copyOf(networks);
         }
     }
-    public record ManagedPeer(long id, String name, String address, Integer role, boolean connected) {}
+    public record ManagedPeer(long id, String name, String address, Integer role, boolean connected, long latencyMs) {}
     public record ManagedNetwork(String id, String name, Integer role, boolean enabled, List<ManagedPeer> peers) {
         public ManagedNetwork { peers = List.copyOf(peers); }
     }
@@ -162,9 +162,10 @@ public final class ClientVpnRuntime implements AutoCloseable {
             Map<String, List<ManagedPeer>> byNetwork = new HashMap<>();
             for (Membership.Peer peer : m.peers().values()) {
                 boolean connected = current != null && current.connected(peer.rid());
+                long latency = connected ? current.latencyMs(peer.rid()) : -1;
                 for (String id : peer.networks()) {
                     byNetwork.computeIfAbsent(id, key -> new ArrayList<>()).add(new ManagedPeer(peer.rid(), peer.name(),
-                            peer.vip() == null ? "" : peer.vip().getHostAddress(), m.role(id, peer.rid()), connected));
+                            peer.vip() == null ? "" : peer.vip().getHostAddress(), m.role(id, peer.rid()), connected, latency));
                 }
             }
             view = m.networks().values().stream().sorted(Comparator.comparing(Membership.Network::name))

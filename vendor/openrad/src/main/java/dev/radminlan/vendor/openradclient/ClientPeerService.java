@@ -74,6 +74,10 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         PeerWorker worker = workers.get(id);
         return worker != null && worker.channel != null;
     }
+    long latencyMs(long id) {
+        PeerWorker worker = workers.get(id);
+        return worker == null || worker.channel == null ? -1 : worker.latencyMs;
+    }
     int connectedCount() { return (int) workers.values().stream().filter(w -> w.channel != null).count(); }
     List<ClientVpnRuntime.LanServer> lanServers() { return lan.snapshot(); }
 
@@ -261,6 +265,7 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         final Set<AutoCloseable> resources = Collections.newSetFromMap(new IdentityHashMap<>());
         volatile boolean stopped;
         volatile PeerChannel channel;
+        volatile long latencyMs = -1;
 
         PeerWorker(PeerAuthorization.Grant grant, IncomingHub.Setup setup, AsyncResourceCloser.Lease cleanup) {
             this.grant = grant;
@@ -308,7 +313,8 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                 signalChanged();
                 int sequence = 0;
                 byte[] peerMac = connected.peerMac();
-                long keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos(), lastPacket = System.nanoTime();
+                long keepalive = System.nanoTime(), lastPacket = System.nanoTime();
+                long pingSent = 0;
                 long lastTraffic = 0;
                 while (!stopped() && !closed.get() && authorized()) {
                     boolean backlog = false;
@@ -320,9 +326,12 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                         lastTraffic = System.nanoTime();
                         backlog = i == 255 && !frames.isEmpty();
                     }
-                    if (System.nanoTime() >= keepalive && connected.send(TunnelCodec.keepalive(sequence + 1, false))) {
+                    long now = System.nanoTime();
+                    if (now >= keepalive && connected.send(TunnelCodec.keepalive(sequence + 1, false))) {
+                        if (pingSent != 0) latencyMs = -1;
                         sequence++;
-                        keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+                        pingSent = now;
+                        keepalive = now + Duration.ofSeconds(15).toNanos();
                     }
                     // Outbound frames are drained only between reads: poll briefly while traffic
                     // flows so client-to-server packets are not held for a full 20 ms wait.
@@ -331,9 +340,13 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                     if (connected.ready(backlog ? Duration.ZERO : busy ? ACTIVE_POLL : IDLE_POLL)) {
                         TunnelCodec.Packet packet = connected.receivePacket();
                         lastPacket = System.nanoTime();
-                        if (packet instanceof TunnelCodec.Keepalive alive && !alive.reply())
-                            connected.send(TunnelCodec.keepalive(alive.sequence(), true));
-                        else if (packet instanceof TunnelCodec.Frames batch && authorized()) {
+                        if (packet instanceof TunnelCodec.Keepalive alive) {
+                            if (!alive.reply()) connected.send(TunnelCodec.keepalive(alive.sequence(), true));
+                            else if (pingSent != 0 && alive.sequence() == sequence) {
+                                latencyMs = TimeUnit.NANOSECONDS.toMillis(lastPacket - pingSent);
+                                pingSent = 0;
+                            }
+                        } else if (packet instanceof TunnelCodec.Frames batch && authorized()) {
                             lastTraffic = lastPacket;
                             // Freshly decoded arrays owned by this worker alone: no defensive copies.
                             for (byte[] frame : batch.ownedFrames()) {
