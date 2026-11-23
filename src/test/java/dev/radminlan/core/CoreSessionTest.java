@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.EOFException;
+import java.io.IOException;
 import java.net.SocketException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
