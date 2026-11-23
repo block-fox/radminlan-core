@@ -2,6 +2,10 @@ package dev.radminlan.vendor.openradclient;
 
 import dev.radminlan.core.Ipv4Link;
 import dev.radminlan.vendor.openradclient.virtual.OutboundTcpStack;
+import dev.radminlan.vendor.openradclient.virtual.InboundTcpBridge;
+import dev.radminlan.vendor.openradclient.virtual.InboundLanFirewall;
+import dev.radminlan.vendor.openradplugin.discovery.LanAdvertisement;
+import dev.radminlan.vendor.openradplugin.protocol.Wire;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import dev.radminlan.vendor.openradplugin.crypto.Identity;
@@ -44,6 +48,11 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
     private final LanServerRegistry lan = new LanServerRegistry();
     private final OutboundTcpStack stack;
     private final Supplier<Consumer<byte[]>> packetReceiver;
+    private final Supplier<LanAdvertisement> publishedRoom;
+    private record HostedRoom(LanAdvertisement room, InboundTcpBridge bridge) {}
+    private volatile HostedRoom hosting;
+    private LanAdvertisement failedRoom;
+    private final Consumer<String> logger;
     private volatile Map<Long, PeerAuthorization.Grant> authorized = Map.of();
     /** Same grants indexed by VIP for the per-frame send path; republished with authorized. */
     private volatile Map<Inet4Address, PeerAuthorization.Grant> authorizedByVip = Map.of();
@@ -54,12 +63,15 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
 
     ClientPeerService(Identity identity, Attachment attachment, ClientConfig config,
                       CoordinatorEndpoint coordinator, AcceptorRelayGuard relayGuard,
-                      Supplier<Consumer<byte[]>> packetReceiver) {
+                      Supplier<Consumer<byte[]>> packetReceiver, Supplier<LanAdvertisement> publishedRoom,
+                      Consumer<String> logger) {
         this.identity = identity;
         this.attachment = attachment;
         this.coordinator = coordinator;
         this.relayGuard = relayGuard;
         this.packetReceiver = packetReceiver;
+        this.publishedRoom = publishedRoom;
+        this.logger = logger;
         this.maxPeers = config.maxPeers();
         this.transports = transports(config);
         this.selectedNames = Set.copyOf(config.networks());
@@ -80,6 +92,16 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         PeerWorker worker = workers.get(id);
         return worker != null && worker.channel != null;
     }
+    String connectionType(long id) {
+        PeerWorker worker = workers.get(id);
+        PeerChannel channel = worker == null ? null : worker.channel;
+        if (channel == null) return "";
+        return switch (channel.path()) {
+            case DIRECT_TCP -> "TCP";
+            case DIRECT_UDP -> "UDP";
+            case RELAY -> "Relay";
+        };
+    }
     long latencyMs(long id) {
         PeerWorker worker = workers.get(id);
         return worker == null || worker.channel == null ? -1 : worker.latencyMs;
@@ -90,6 +112,7 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
     /** Called by the authenticated control worker; membership itself never crosses threads. */
     void tick(Membership membership) throws IOException {
         if (closed.get()) return;
+        updateHost();
         Map<Long, PeerAuthorization.Grant> next = PeerAuthorization.select(membership, selectedNames);
         Map<Inet4Address, PeerAuthorization.Grant> byVip = new HashMap<>();
         for (PeerAuthorization.Grant grant : next.values()) byVip.putIfAbsent(grant.peer().vip(), grant);
@@ -254,6 +277,42 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         }
     }
 
+    private synchronized void updateHost() {
+        LanAdvertisement room = packetReceiver.get() == null ? publishedRoom.get() : null;
+        HostedRoom old = hosting;
+        if (closed.get()) return;
+        if (!Objects.equals(room, failedRoom)) failedRoom = null;
+        if (Objects.equals(room, old == null ? null : old.room())) return;
+        if (old != null && room != null && old.room().port() == room.port()) {
+            hosting = new HostedRoom(room, old.bridge());
+            return;
+        }
+        hosting = null;
+        if (old != null) old.bridge().close();
+        if (room == null || room.equals(failedRoom)) return;
+        try {
+            var bridge = new InboundTcpBridge(Wire.ipInt(attachment.vip()), TunnelCodec.mac(attachment.vip()),
+                    room.port(), new InetSocketAddress("127.0.0.1", room.port()), (rid, frame) -> {
+                        PeerWorker worker = workers.get(rid);
+                        if (worker == null || worker.channel == null || !worker.authorized()) return;
+                        try {
+                            worker.offer(frame);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+            hosting = new HostedRoom(room, bridge);
+        } catch (IOException failure) {
+            failedRoom = room;
+            logger.accept("Could not open the Minecraft LAN bridge: " + failure.getClass().getSimpleName());
+        }
+    }
+
+    private void revokeHostedPeer(long rid) {
+        HostedRoom room = hosting;
+        if (room != null) room.bridge().revokePeer(rid);
+    }
+
     private void sendFrame(Inet4Address destination, byte[] frame) throws IOException {
         if (closed.get()) throw new IOException("OpenRad session closed");
         PeerAuthorization.Grant grant = authorizedByVip.get(destination);
@@ -337,7 +396,15 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                 long keepalive = System.nanoTime(), lastPacket = System.nanoTime();
                 long pingSent = 0;
                 long lastTraffic = 0;
+                long nextAdvertisement = 0;
                 while (!stopped() && !closed.get() && authorized()) {
+                    HostedRoom room = hosting;
+                    long announcementTime = System.nanoTime();
+                    if (room != null && packetReceiver.get() == null && room.room().equals(publishedRoom.get())
+                            && (nextAdvertisement == 0 || announcementTime >= nextAdvertisement)) {
+                        connected.sendFrame(room.room().frame(attachment.vip(), room.room().port(), (int) announcementTime & 0xffff));
+                        nextAdvertisement = announcementTime + TimeUnit.MILLISECONDS.toNanos(1500);
+                    }
                     boolean backlog = false;
                     for (int i = 0; i < 256; i++) {
                         if (stopped() || closed.get() || !authorized()) break;
@@ -376,6 +443,11 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                                 Consumer<byte[]> sink = packetReceiver.get();
                                 if (sink == null || frame.length >= 14 && frame[12] == 8 && frame[13] == 6) {
                                     stack.acceptEthernet(grant.peer().vip(), frame);
+                                    HostedRoom activeRoom = hosting;
+                                    if (sink == null && activeRoom != null && activeRoom.room().equals(publishedRoom.get())) {
+                                        activeRoom.bridge().accept(new InboundLanFirewall.PeerGrant(rid, true, grant.networkIds(),
+                                                Wire.ipInt(grant.peer().vip()), peerMac), frame);
+                                    }
                                 } else {
                                     byte[] ipv4 = Ipv4Link.inbound(frame, grant.peer().vip(), peerMac, attachment.vip());
                                     if (ipv4 != null) sink.accept(ipv4);
@@ -413,6 +485,7 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                 resources.clear();
                 frames.close();
             }
+            revokeHostedPeer(grant.peer().rid());
             if (setup != null) setup.close();
             cleanup.finish(owned);
         }
@@ -423,6 +496,11 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         authorized = Map.of();
         authorizedByVip = Map.of();
         stack.close();
+        synchronized (this) {
+            HostedRoom old = hosting;
+            hosting = null;
+            if (old != null) old.bridge().close();
+        }
         workers.values().forEach(PeerWorker::close);
         workers.clear();
         executor.shutdownNow();

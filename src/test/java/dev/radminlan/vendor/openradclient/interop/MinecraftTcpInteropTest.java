@@ -1,8 +1,8 @@
 package dev.radminlan.vendor.openradclient.interop;
 
 import dev.radminlan.vendor.openradclient.virtual.OutboundTcpStack;
-import dev.radminlan.vendor.openradclient.interop.reference.ReferenceServerTcpBridge;
-import dev.radminlan.vendor.openradclient.interop.reference.ReferenceInboundFirewall;
+import dev.radminlan.vendor.openradclient.virtual.InboundTcpBridge;
+import dev.radminlan.vendor.openradclient.virtual.InboundLanFirewall;
 import dev.radminlan.vendor.openradplugin.crypto.Channel;
 import dev.radminlan.vendor.openradplugin.link.*;
 import dev.radminlan.vendor.openradplugin.tunnel.TunnelCodec;
@@ -24,8 +24,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class MinecraftTcpInteropTest {
     private static final int CLIENT = 0x1a0a0001, SERVER = 0x1a0a0002;
     private static final Inet4Address CLIENT_IP = ip(CLIENT), SERVER_IP = ip(SERVER);
-    private static final ReferenceInboundFirewall.PeerGrant GRANT =
-            new ReferenceInboundFirewall.PeerGrant(1234, true, Set.of("isolated-test"),
+    private static final InboundLanFirewall.PeerGrant GRANT =
+            new InboundLanFirewall.PeerGrant(1234, true, Set.of("isolated-test"),
                     CLIENT, OpenRadAddress.mac(CLIENT));
 
     private static Inet4Address ip(int value) {
@@ -35,7 +35,7 @@ class MinecraftTcpInteropTest {
     }
 
     private static final class EncryptedLink implements AutoCloseable {
-        final AtomicReference<ReferenceServerTcpBridge> server = new AtomicReference<>();
+        final AtomicReference<InboundTcpBridge> server = new AtomicReference<>();
         final AtomicReference<OutboundTcpStack> client = new AtomicReference<>();
         final Channel clientCipher, serverCipher;
         final AtomicBoolean loseSyn = new AtomicBoolean(), loseData = new AtomicBoolean();
@@ -82,7 +82,7 @@ class MinecraftTcpInteropTest {
              ServerSocket backend = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
              EncryptedLink link = new EncryptedLink(true);
              OutboundTcpStack client = new OutboundTcpStack(CLIENT_IP, link::fromClient);
-             ReferenceServerTcpBridge server = new ReferenceServerTcpBridge(SERVER,
+             InboundTcpBridge server = new InboundTcpBridge(SERVER,
                      OpenRadAddress.mac(SERVER), 25565,
                      new InetSocketAddress(backend.getInetAddress(), backend.getLocalPort()), link::fromServer)) {
             link.client.set(client); link.server.set(server);
@@ -131,7 +131,7 @@ class MinecraftTcpInteropTest {
              ServerSocket backend = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
              EncryptedLink link = new EncryptedLink(false);
              OutboundTcpStack client = new OutboundTcpStack(CLIENT_IP, link::fromClient);
-             ReferenceServerTcpBridge server = new ReferenceServerTcpBridge(SERVER,
+             InboundTcpBridge server = new InboundTcpBridge(SERVER,
                      OpenRadAddress.mac(SERVER), 25565,
                      new InetSocketAddress(backend.getInetAddress(), backend.getLocalPort()), link::fromServer)) {
             link.client.set(client); link.server.set(server);

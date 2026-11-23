@@ -29,6 +29,17 @@ public final class CoreSession implements AutoCloseable {
     public boolean start() { return runtime.connect(); }
     public void stop() { runtime.disconnect(); }
     public boolean awaitStopped(Duration timeout) throws InterruptedException { return runtime.awaitStopped(timeout); }
+    public record LanRoom(String motd, String host, int port) {}
+
+    public List<LanRoom> lanRooms() {
+        return runtime.lanServers().stream().map(room -> new LanRoom(room.motd(), room.address(), room.port())).toList();
+    }
+
+    public void setAdvertisedName(String name) { runtime.setAdvertisedName(name); }
+
+    /** Advertise and forward the explicitly published game port. A zero port clears hosting. */
+    public void setPublishedRoom(int port, String motd) { runtime.setPublishedRoom(port, motd); }
+
     public ManagementView view() { return runtime.managementView(); }
     public List<String> publicNetworks() {
         return runtime.minecraftCatalog().entries().stream().map(entry -> entry.name()).distinct().sorted().toList();

@@ -3,6 +3,7 @@ package dev.radminlan.vendor.openradclient;
 import static dev.radminlan.vendor.openradplugin.protocol.Wire.*;
 
 import dev.radminlan.vendor.openradplugin.crypto.Identity;
+import dev.radminlan.vendor.openradplugin.discovery.LanAdvertisement;
 import dev.radminlan.vendor.openradplugin.network.Membership;
 import dev.radminlan.vendor.openradplugin.network.NetworkJoin;
 import dev.radminlan.vendor.openradplugin.network.NetworkManagement;
@@ -46,7 +47,8 @@ public final class ClientVpnRuntime implements AutoCloseable {
             networks = List.copyOf(networks);
         }
     }
-    public record ManagedPeer(long id, String name, String address, Integer role, boolean connected, long latencyMs) {}
+    public record ManagedPeer(long id, String name, String address, Integer role, boolean connected,
+                              long latencyMs, boolean online, boolean presenceKnown, String connectionType, boolean local) {}
     public record ManagedNetwork(String id, String name, Integer role, boolean enabled, List<ManagedPeer> peers) {
         public ManagedNetwork { peers = List.copyOf(peers); }
     }
@@ -73,6 +75,8 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private final AtomicBoolean provisioning = new AtomicBoolean();
     private final AtomicReference<ControlSession> active = new AtomicReference<>();
     private volatile Snapshot state = new Snapshot("OFFLINE", "", List.of(), 0, "");
+    private volatile String advertisedName;
+    private volatile LanAdvertisement publishedRoom;
     private volatile Thread thread;
     private volatile ClientPeerService peers;
     private volatile Consumer<byte[]> packetReceiver;
@@ -88,6 +92,19 @@ public final class ClientVpnRuntime implements AutoCloseable {
         this.config = Objects.requireNonNull(config);
         this.dataDirectory = Objects.requireNonNull(dataDirectory);
         this.logger = Objects.requireNonNull(logger);
+    }
+
+    public void setAdvertisedName(String name) {
+        String next = name == null || name.isBlank() ? null : name;
+        if (next != null) {
+            require(next.codePoints().noneMatch(Character::isISOControl), "invalid device name");
+            TlvCodec.textValue(0x03000304, next);
+        }
+        advertisedName = next;
+    }
+
+    public void setPublishedRoom(int port, String motd) {
+        publishedRoom = port == 0 ? null : new LanAdvertisement(motd, port);
     }
 
     public Snapshot status() { return state; }
@@ -190,9 +207,15 @@ public final class ClientVpnRuntime implements AutoCloseable {
             for (Membership.Peer peer : m.peers().values()) {
                 boolean connected = current != null && current.connected(peer.rid());
                 long latency = connected ? current.latencyMs(peer.rid()) : -1;
+                // The authenticated roster can report a remote device online before we open a game channel.
+                boolean local = peer.rid() == m.ownRid();
+                boolean online = local || connected || peer.online();
+                String connectionType = connected ? current.connectionType(peer.rid()) : "";
                 for (String id : peer.networks()) {
                     byNetwork.computeIfAbsent(id, key -> new ArrayList<>()).add(new ManagedPeer(peer.rid(), peer.name(),
-                            peer.vip() == null ? "" : peer.vip().getHostAddress(), m.role(id, peer.rid()), connected, latency));
+                            local ? vip : peer.vip() == null ? "" : peer.vip().getHostAddress(),
+                            m.role(id, peer.rid()), connected, latency, online,
+                            local || connected || peer.state() != -1, connectionType, local));
                 }
             }
             view = m.networks().values().stream().sorted(Comparator.comparing(Membership.Network::name))
@@ -295,6 +318,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
         while (!stopped.get()) {
             if (abandonedByStragglers()) break;
             long attachedAt = 0;
+            String loginName = advertisedName;
             try {
                 // Closing or interrupting a registration after registration.pending is written
                 // would discard an issued identity and block this profile for good. Disconnect
@@ -305,7 +329,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 try {
                     if (stopped.get()) break;
                     provisioned = Provisioner.loadOrRegister(
-                            coordinator.identityDirectory(), "RadminLAN", coordinator.bootstrap(),
+                            coordinator.identityDirectory(), loginName == null ? "RadminLAN" : loginName, coordinator.bootstrap(),
                             coordinator.port(), this::own, coordinator.modulus());
                 } finally {
                     provisioning.set(false);
@@ -315,15 +339,16 @@ public final class ClientVpnRuntime implements AutoCloseable {
                     provisioned.close();
                     break;
                 }
-                try (Identity identity = provisioned;
-                     Attachment connection = Attachment.connect(
-                        identity, coordinator.port(), identity.nodeName(), this::own, coordinator.modulus())) {
-                    own(connection.session());
-
-                    attachedAt = System.nanoTime();
-                    update("JOINING_NETWORKS", connection.vip().getHostAddress(),
-                            connection.membership(), "");
-                    runConnected(identity, connection, coordinator, relayGuard);
+                try (Identity identity = provisioned) {
+                    String registeredName = identity.nodeName();
+                    if (loginName != null) identity.setNodeName(loginName);
+                    try (Attachment connection = Attachment.connect(identity, coordinator.port(),
+                            identity.nodeName(), this::own, coordinator.modulus())) {
+                        own(connection.session());
+                        attachedAt = System.nanoTime();
+                        update("JOINING_NETWORKS", connection.vip().getHostAddress(), connection.membership(), "");
+                        runConnected(identity, connection, coordinator, relayGuard, registeredName);
+                    }
                 }
                 if (!stopped.get()) throw new IOException("control session ended");
             } catch (Exception ex) {
@@ -359,7 +384,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 long until = System.nanoTime() + Duration.ofSeconds(delay).toNanos()
                         + java.util.concurrent.ThreadLocalRandom.current().nextLong(250_000_000L);
                 try {
-                    while (!stopped.get() && System.nanoTime() < until)
+                    while (!stopped.get() && Objects.equals(loginName, advertisedName) && System.nanoTime() < until)
                         Thread.sleep(Math.max(1, Math.min(100, (until - System.nanoTime()) / 1_000_000L)));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -435,9 +460,10 @@ public final class ClientVpnRuntime implements AutoCloseable {
     }
 
     private void runConnected(Identity identity, Attachment connection, CoordinatorEndpoint coordinator,
-                              AcceptorRelayGuard relayGuard) throws IOException {
+                              AcceptorRelayGuard relayGuard, String registeredName) throws IOException {
         relayGuard.startAttachment();
-        try (ClientPeerService peerService = new ClientPeerService(identity, connection, config, coordinator, relayGuard, () -> packetReceiver)) {
+        try (ClientPeerService peerService = new ClientPeerService(identity, connection, config, coordinator, relayGuard,
+                () -> packetReceiver, () -> publishedRoom, logger)) {
             peers = peerService;
             Set<String> initialTargets = resolveNetworks(connection, peerService);
             var targets = new LinkedHashSet<>(initialTargets);
@@ -449,7 +475,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
             }
             activeNetworkNames = Set.copyOf(targets);
             peerService.selectNetworks(activeNetworkNames);
-            runConnected(connection, peerService, targets);
+            runConnected(connection, peerService, targets, identity, registeredName);
         } finally {
             ClientPeerService current = peers;
             peers = null;
@@ -512,13 +538,24 @@ public final class ClientVpnRuntime implements AutoCloseable {
         }
     }
 
-    private void runConnected(Attachment connection, ClientPeerService peerService, Set<String> targets) throws IOException {
+    private void runConnected(Attachment connection, ClientPeerService peerService, Set<String> targets,
+                              Identity identity, String registeredName) throws IOException {
         ControlSession session = connection.session();
         Membership membership = connection.membership();
         long heartbeat = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         long id = 1;
         int sequence = 1;
         List<String> problems = new ArrayList<>(catalog.problems());
+        Membership.Peer self = membership.peers().get(membership.ownRid());
+        String rosterName = self == null ? registeredName : self.name();
+        String attemptedName = null;
+        String desiredName = advertisedName;
+        if (desiredName != null) {
+            attemptedName = desiredName;
+            if (desiredName.equals(rosterName) || publishDeviceName(connection, peerService, desiredName, id++, sequence++)) {
+                identity.setNodeName(desiredName);
+            }
+        }
         // Automatic rejoin is allowed only for explicitly supplied startup networks.
         // Runtime selections become eligible again if membership still exists.
         List<String> ordered = targets.stream().filter(name -> !networkOverrides.containsKey(name))
@@ -571,6 +608,17 @@ public final class ClientVpnRuntime implements AutoCloseable {
         long lastControl = snapshot;
         PeerScanSchedule scans = new PeerScanSchedule(snapshot);
         while (!stopped.get()) {
+            desiredName = advertisedName;
+            if (!Objects.equals(desiredName, attemptedName)) {
+                attemptedName = desiredName;
+                String nextName = desiredName == null ? registeredName : desiredName;
+                if (publishDeviceName(connection, peerService, nextName, id++, sequence++)) {
+                    identity.setNodeName(nextName);
+                    lastControl = System.nanoTime();
+                    snapshot = lastControl;
+                }
+                controlStage = "connected session";
+            }
             Request request = management.poll();
             if (request != null) {
                 boolean ok = false;
@@ -617,6 +665,31 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 snapshot = lastSnapshot + Duration.ofSeconds(1).toNanos();
             }
         }
+    }
+
+    private boolean publishDeviceName(Attachment connection, ClientPeerService peerService,
+                                      String name, long id, int sequence) throws IOException {
+        ControlSession session = connection.session();
+        Membership membership = connection.membership();
+        controlStage = "device rename";
+        try (var rename = NetworkManagement.renameDevice(name, id, sequence)) {
+            session.send(rename.start());
+            long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (!stopped.get() && System.nanoTime() < until) {
+                if (!session.ready(Duration.ofMillis(100))) continue;
+                byte[] record = session.receive();
+                handle(record, membership, peerService);
+                var result = rename.handle(record, membership);
+                if (result != null) {
+                    if (!result.success()) logger.accept("The coordinator refused the device name change (" + result.errorCode() + ")");
+                    return result.success();
+                }
+                var own = membership.peers().get(membership.ownRid());
+                if (own != null && name.equals(own.name())) return true;
+            }
+        }
+        if (!stopped.get()) logger.accept("The coordinator did not confirm the device name change");
+        return false;
     }
 
     private boolean applyManagement(Request request, Attachment connection, ClientPeerService peerService,

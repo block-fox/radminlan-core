@@ -10,9 +10,10 @@ import java.util.Arrays;
 import java.util.HexFormat;
 
 /**
- * Correlated private-network creation, leave, delete and member removal requests, matching canonical network.rs.
+ * Correlated requests for network management and changes to the authenticated device name.
  */
 public final class NetworkManagement implements AutoCloseable {
+    private static final int RENAME_DEVICE = 10;
     private final int action, sequence;
     private final long id, expectedMember;
     private final String expectedName, expectedNetwork;
@@ -101,6 +102,10 @@ public final class NetworkManagement implements AutoCloseable {
                 concat(network(networkId), u64(0x020001e1, member)));
     }
 
+    public static NetworkManagement renameDevice(String name, long id, int sequence) {
+        return new NetworkManagement(RENAME_DEVICE, id, sequence, null, null, 0, text(0x03000304, name));
+    }
+
     private static byte[] network(String networkId) {
         byte[] bytes;
         try {
@@ -135,7 +140,9 @@ public final class NetworkManagement implements AutoCloseable {
             return new Result(false, TlvCodec.int32(error.orElseThrow()), expectedNetwork);
         }
         String networkId;
-        if (action == 1) {
+        if (action == RENAME_DEVICE) {
+            networkId = null;
+        } else if (action == 1) {
             byte[] root = tlv(0x1316, tlv(0x1315, field(response, 0x1315)));
             Membership returned = new Membership(0);
             returned.snapshot(root);

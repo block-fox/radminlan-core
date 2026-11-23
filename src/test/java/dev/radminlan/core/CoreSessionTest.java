@@ -44,13 +44,13 @@ final class CoreSessionTest {
             Files.write(profile.resolve("modulus.bin"), SyntheticControlService.modulus());
             Path identityPath = CoordinatorEndpoint.load(profile, "127.0.0.1", port).identityDirectory();
             Files.createDirectories(identityPath);
-            try (var identity = new Identity(OWN_ID, ipv4("26.0.0.1"), "Test", new byte[16], PASSWORD, "127.0.0.1")) {
+            try (var identity = new Identity(OWN_ID, ipv4("26.0.0.1"), "Alex (playing with radminlan mod)", new byte[16], PASSWORD, "127.0.0.1")) {
                 identity.save(identityPath.resolve("identity.json"));
             }
             byte[] network = tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 1)));
             var served = java.util.concurrent.CompletableFuture.runAsync(() -> {
                 try {
-                    try (var service = attach(listener, new byte[0])) {
+                    try (var service = attach(listener, new byte[0], "Alex (playing with radminlan mod)")) {
                         var join = fields(field(fields(next(service, 39)), 0x131c));
                         long joinId = wide(join, 0x02000340);
                         // An unrelated acknowledgement must not complete the operation.
@@ -64,7 +64,8 @@ final class CoreSessionTest {
                             tlv(0x1317, concat(u64(0x020001e1, MEMBER_ID), text(0x03000304, "Test member"), u32(0x01000305, 0x1a000002))),
                             tlv(0x1318, concat(tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID), u32(0x0100030a, 1))));
                     byte[] ownedNetwork = tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 2)));
-                    try (var service = attach(listener, concat(ownedNetwork, member))) {
+                    try (var service = attach(listener, concat(ownedNetwork, member), "Alex renamed")) {
+                        confirmRename(service, "Alex renamed");
                         var kick = fields(field(fields(next(service, 52)), 0x1319));
                         assertEquals(4, number(kick, 0x0100030c));
                         assertEquals(MEMBER_ID, wide(kick, 0x020001e1));
@@ -81,6 +82,7 @@ final class CoreSessionTest {
                 } catch (Exception error) { throw new AssertionError(error); }
             });
             assertFalse(session.manage(Action.JOIN, NETWORK, null).join());
+            session.setAdvertisedName("Alex (playing with radminlan mod)");
             assertTrue(session.start());
             awaitConnected(session, served);
             assertTrue(session.manage(Action.JOIN, NETWORK, null).get(5, TimeUnit.SECONDS));
@@ -92,6 +94,7 @@ final class CoreSessionTest {
             session.close();
             assertTrue(session.awaitStopped(Duration.ofSeconds(4)));
             try (var restarted = new CoreSession(profile, List.of(NETWORK), ignored -> {})) {
+                restarted.setAdvertisedName("Alex renamed");
                 assertTrue(restarted.start());
                 awaitConnected(restarted, served);
                 assertFalse(restarted.view().networks().getFirst().enabled(), "saved disable wins over the startup network list");
@@ -110,6 +113,67 @@ final class CoreSessionTest {
         }
     }
 
+    @Test void changesAnExistingIdentityNameWhileConnected() throws Exception {
+        try (var listener = new ServerSocket(0, 1, ipv4("127.0.0.1"));
+             var session = new CoreSession(profile, List.of(), ignored -> {})) {
+            listener.setSoTimeout(7_000);
+            int port = listener.getLocalPort();
+            Files.writeString(profile.resolve("coordinator.properties"), "host=127.0.0.1\nport=" + port);
+            Files.write(profile.resolve("modulus.bin"), SyntheticControlService.modulus());
+            Path directory = CoordinatorEndpoint.load(profile, "127.0.0.1", port).identityDirectory();
+            Files.createDirectories(directory);
+            try (var saved = new Identity(OWN_ID, ipv4("26.0.0.1"), "RadminLAN", new byte[16], PASSWORD, "127.0.0.1")) {
+                saved.save(directory.resolve("identity.json"));
+            }
+            byte[] roster = concat(
+                    tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 2))),
+                    tlv(0x1317, concat(u64(0x020001e1, OWN_ID), text(0x03000304, "RadminLAN"), u32(0x01000305, 0x1a000001))),
+                    tlv(0x1318, concat(tlv(0x0d000309, GUID), u64(0x020001e1, OWN_ID), u32(0x0100030a, 2))));
+            var renamed = new java.util.concurrent.CompletableFuture<Void>();
+            var removedSuffix = new java.util.concurrent.CompletableFuture<Void>();
+            var served = java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    try (var service = attach(listener, roster, "RadminLAN")) {
+                        confirmRename(service, "frank_banana （安卓，通过radmin linker模组）");
+                        renamed.complete(null);
+                        confirmRename(service, "frank_banana");
+                        service.send(concat(server(41), tlv(0x131f, tlv(0x132d,
+                                concat(u64(0x020001e1, OWN_ID), text(0x03000304, "frank_banana"))))));
+                        removedSuffix.complete(null);
+                        waitForDisconnect(service);
+                    }
+                } catch (Exception | AssertionError failure) {
+                    renamed.completeExceptionally(failure);
+                    removedSuffix.completeExceptionally(failure);
+                    throw new AssertionError(failure);
+                }
+            });
+            assertTrue(session.start());
+            awaitConnected(session, served);
+            var self = session.view().networks().getFirst().peers().getFirst();
+            assertTrue(self.local());
+            assertTrue(self.online());
+            assertEquals("26.0.0.1", self.address());
+            session.setAdvertisedName("frank_banana （安卓，通过radmin linker模组）");
+            renamed.get(8, TimeUnit.SECONDS);
+            session.setAdvertisedName("frank_banana");
+            removedSuffix.get(8, TimeUnit.SECONDS);
+            awaitConnected(session, served);
+            assertEquals(ID, session.view().networks().getFirst().id());
+            long until = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+            while (!session.view().networks().getFirst().peers().getFirst().name().equals("frank_banana")
+                    && System.nanoTime() < until) Thread.sleep(20);
+            var renamedPeer = session.view().networks().getFirst().peers().getFirst();
+            assertEquals("frank_banana", renamedPeer.name());
+            assertEquals(OWN_ID, renamedPeer.id());
+            assertEquals(self.address(), renamedPeer.address());
+            assertTrue(renamedPeer.online());
+            session.stop();
+            assertTrue(session.awaitStopped(Duration.ofSeconds(4)));
+            served.get(4, TimeUnit.SECONDS);
+        }
+    }
+
     private static void awaitConnected(CoreSession session, java.util.concurrent.CompletableFuture<Void> served)
             throws InterruptedException {
         long until = System.nanoTime() + Duration.ofSeconds(7).toNanos();
@@ -120,10 +184,12 @@ final class CoreSessionTest {
         assertEquals("CONNECTED", session.view().status().phase());
     }
 
-    private static SyntheticControlService.Authenticated attach(ServerSocket listener, byte[] network) throws Exception {
+    private static SyntheticControlService.Authenticated attach(ServerSocket listener, byte[] network, String alias) throws Exception {
         var service = SyntheticControlService.authenticate(listener.accept(), 4, OWN_ID, PASSWORD);
         try {
-            assertEquals(20, number(fields(service.receive()), TlvCodec.CLIENT_OP));
+            var login = fields(service.receive());
+            assertEquals(20, number(login, TlvCodec.CLIENT_OP));
+            assertEquals(alias, TlvCodec.text(field(fields(field(login, 0x122f)), 0x03000304)));
             service.send(server(21));
             service.send(concat(server(38), tlv(0x1316, concat(u32(0x01000305, 0x1a000001),
                     tlv(0x09000305, new byte[16]), network))));
@@ -136,6 +202,14 @@ final class CoreSessionTest {
             service.close();
             throw failure;
         }
+    }
+
+    private static void confirmRename(SyntheticControlService.Authenticated service, String name) throws Exception {
+        var request = fields(field(fields(next(service, 52)), 0x1319));
+        assertEquals(10, number(request, 0x0100030c));
+        assertEquals(name, TlvCodec.text(field(request, 0x03000304)));
+        service.send(concat(server(37), tlv(0x131a, concat(u32(0x0100030c, 10),
+                u64(0x02000340, wide(request, 0x02000340)), u32(0x0100034a, number(request, 0x0100034a))))));
     }
 
     private static void waitForDisconnect(SyntheticControlService.Authenticated service) {

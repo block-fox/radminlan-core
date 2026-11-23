@@ -21,6 +21,8 @@ public final class Membership {
         public Peer {
             networks = Set.copyOf(networks);
         }
+
+        public boolean online() { return state != -1 && (state & 1) != 0; }
     }
 
     static final int MAX_PEERS = 65536;
@@ -134,7 +136,7 @@ public final class Membership {
             state =
                     explicitState != null
                             ? explicitState.intValue()
-                            : known != null ? known.state() : 0;
+                            : known != null ? known.state() : -1;
         }
         peers.put(rid, new Peer(rid, name, ip, server, state, ids));
     }
@@ -171,6 +173,17 @@ public final class Membership {
                 if (TlvCodec.optional(f, 0x01000305).isPresent()) peer(r.value(), true);
                 else role(f, wide(f, 0x020001e1));
             }
+        // A device rename is a RID and name only. Keep its addresses, presence and memberships.
+        for (var r : entries) {
+            if (r.tag() != 0x132d) continue;
+            var f = fields(r.value());
+            long rid = wide(f, 0x020001e1);
+            Peer known = peers.get(rid);
+            if (known != null) {
+                String name = displayName(field(f, 0x03000304));
+                peers.put(rid, new Peer(rid, name, known.vip(), known.server(), known.state(), known.networks()));
+            }
+        }
         for (var r : entries) if (r.tag() == 0x1323) network(r.value());
         for (var r : entries)
             if (r.tag() == 0x1318) {
@@ -217,7 +230,7 @@ public final class Membership {
         for (Peer p : peers.values()) {
             if (p.rid() == ownRid
                     || p.server() == null
-                    || (p.state() != 1 && p.state() != 5)
+                    || !p.online()
                     || denied.contains(p.rid())
                     || (!allowed.isEmpty() && !allowed.contains(p.rid()))) continue;
             for (String id : p.networks()) {

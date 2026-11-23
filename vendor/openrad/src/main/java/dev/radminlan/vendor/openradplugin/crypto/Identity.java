@@ -37,7 +37,8 @@ public final class Identity implements AutoCloseable {
     private static final int MAX_FILE = 65536;
     private final long rid;
     private final Inet4Address vip;
-    private final String nodeName, serverAddress;
+    private volatile String nodeName;
+    private final String serverAddress;
     private final byte[] address, password;
 
     public Identity(
@@ -88,6 +89,12 @@ public final class Identity implements AutoCloseable {
 
     public Inet4Address vip() {
         return vip;
+    }
+
+    /** Update the in-memory name for subsequent peer connections. The registered identity stays the same. */
+    public void setNodeName(String name) {
+        validateNodeName(name);
+        nodeName = name;
     }
 
     public String nodeName() {
@@ -213,13 +220,17 @@ public final class Identity implements AutoCloseable {
         return json.getBytes(StandardCharsets.UTF_8);
     }
 
-    private void validate(boolean registered) {
-        require(rid != 0 && password.length >= 6 && password.length <= 4096, "invalid identity");
+    private static void validateNodeName(String nodeName) {
         require(
                 !nodeName.strip().isEmpty()
                         && nodeName.codePoints().noneMatch(Character::isISOControl),
                 "invalid device name");
         TlvCodec.textValue(0x03000304, nodeName);
+    }
+
+    private void validate(boolean registered) {
+        require(rid != 0 && password.length >= 6 && password.length <= 4096, "invalid identity");
+        validateNodeName(nodeName);
         ipv4(serverAddress);
         if (registered) {
             require(
