@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-/** One local helper connects a user-owned Linux TUN to a CoreSession. */
+/** A local helper connects a system packet interface to a CoreSession. */
 final class TunProcess implements AutoCloseable {
     private static final byte[] HELLO = {'R', 'L', 'T', '1'};
     private final CoreSession session;
@@ -24,8 +24,11 @@ final class TunProcess implements AutoCloseable {
     private Thread writer;
 
     static TunProcess open(CoreSession session, Path helper, String name) throws IOException, InterruptedException {
-        if (!System.getProperty("os.name", "").equalsIgnoreCase("Linux")) throw new IOException("This TUN helper requires Linux");
-        if (!name.matches("[A-Za-z0-9_.-]{1,15}") || !Files.isRegularFile(helper) || !Files.isExecutable(helper)) {
+        String os = System.getProperty("os.name", "");
+        boolean mac = os.equalsIgnoreCase("Mac OS X");
+        if (!mac && !os.equalsIgnoreCase("Linux")) throw new IOException("The TUN helper requires Linux or macOS");
+        if (!name.matches(mac ? "utun[0-9]{1,5}" : "[A-Za-z0-9_.-]{1,15}")
+                || !Files.isRegularFile(helper) || !Files.isExecutable(helper)) {
             throw new IllegalArgumentException("Expected an existing TUN name and an executable helper file");
         }
         Process process = new ProcessBuilder(helper.toAbsolutePath().toString(), name)

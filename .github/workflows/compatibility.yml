@@ -23,12 +23,22 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           cc -std=c11 -Wall -Wextra -Werror -O2 platform/linux/tun.c -o build/radminlan-tun
-          sudo unshare --net python3 platform/linux/smoke.py build/radminlan-tun
+          sudo unshare --net python3 platform/tun-smoke.py build/radminlan-tun
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
           name: radminlan-tun-linux-x64
           path: build/radminlan-tun
+          if-no-files-found: error
+      - if: runner.os == 'macOS'
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -O2 platform/macos/utun.c -o build/radminlan-utun
+          sudo python3 platform/tun-smoke.py build/radminlan-utun
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: radminlan-utun-macos
+          path: build/radminlan-utun
           if-no-files-found: error
   android:
     runs-on: ubuntu-latest

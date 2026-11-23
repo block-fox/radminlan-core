@@ -1,4 +1,5 @@
 from pathlib import Path
+import platform
 import select
 import socket
 import struct
@@ -6,9 +7,10 @@ import subprocess
 import sys
 
 
-# Invoked in a dedicated Linux network namespace by CI.
+# Uses a Linux network namespace or a temporary utun on a disposable macOS runner.
 helper = str(Path(sys.argv[1]).resolve(strict=True))
-iface = 'radminlan0'
+mac = platform.system() == 'Darwin'
+iface = 'utun70' if mac else 'radminlan0'
 local, remote = '26.77.1.1', '26.77.1.2'
 
 
@@ -33,12 +35,15 @@ def checksum(data):
     return ~value & 0xffff
 
 
-run('ip', 'tuntap', 'add', 'dev', iface, 'mode', 'tun')
-run('ip', 'address', 'add', local + '/24', 'dev', iface)
-run('ip', 'link', 'set', 'dev', iface, 'mtu', '1500', 'up')
+if not mac:
+    run('ip', 'tuntap', 'add', 'dev', iface, 'mode', 'tun')
+    run('ip', 'address', 'add', local + '/24', 'dev', iface)
+    run('ip', 'link', 'set', 'dev', iface, 'mtu', '1500', 'up')
 process = subprocess.Popen([helper, iface], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
 try:
     assert read_stream(process.stdout, 4) == b'RLT1'
+    if mac:
+        run('ifconfig', iface, 'inet', local, remote, 'netmask', '255.255.255.255', 'mtu', '1500', 'up')
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as app:
         app.settimeout(5)
         app.bind((local, 31577))
@@ -58,7 +63,7 @@ try:
         assert app.recvfrom(64) == (data, (remote, 31578))
     process.stdin.close()
     assert process.wait(timeout=5) == 0
-    print('LINUX_TUN_BIDIRECTIONAL_OK')
+    print(('MACOS_UTUN' if mac else 'LINUX_TUN') + '_BIDIRECTIONAL_OK')
 finally:
     if process.poll() is None:
         process.kill()

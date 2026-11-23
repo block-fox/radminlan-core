@@ -38,6 +38,18 @@ sudo ip route add <peer-virtual-ip>/32 dev radminlan0
 
 In the connected CLI, enter `tun radminlan0 /absolute/path/to/radminlan-tun`. The helper only attaches to the chosen existing interface. It exchanges unicast IPv4 packets for authenticated peers. Use `untun` to release the helper, then `sudo ip tuntap del dev radminlan0 mode tun` to remove the interface and its routes. The CLI also releases the helper when it disconnects or exits.
 
+## macOS system utun
+
+Build `cc -std=c11 -O2 platform/macos/utun.c -o radminlan-utun`. Choose an unused `utun` number and run the helper with the permissions needed to create the interface. The CLI accepts an executable launcher for this purpose. For example, on a development machine you can run `sudo -v` in the same terminal and use a launcher containing `exec /usr/bin/sudo -n /absolute/path/radminlan-utun "$@"`.
+
+After connecting the CLI, enter `tun utun70 /absolute/path/to/launcher`. Configure the interface from another terminal using the address shown by `status` and the intended peer:
+
+```sh
+sudo ifconfig utun70 inet <local-virtual-ip> <peer-virtual-ip> netmask 255.255.255.255 mtu 1500 up
+```
+
+The peer route and interface disappear when the helper closes. Add additional host routes only for peers that need system-level access.
+
 ## Minecraft embedding
 
 Build RadminLAN Core first, then build RadminLAN with `RADMIN_CORE_JAR` set to the absolute core JAR path. The mod's `AUTO` backend uses the core on non-Windows platforms and keeps the official named-pipe backend on Windows. `CORE` forces the core, and `WINDOWS` forces the official backend.
@@ -52,10 +64,10 @@ The build verifies the JAR identity and copies only the core classes and its lic
 ## Platform plan
 
 - Windows uses the official-compatible service backend by default, with optional embedded core mode.
-- Linux and macOS can use the embedded engine for game TCP. Linux also offers the CLI system TUN mode described above.
+- Linux and macOS can use the embedded engine for game TCP. Both have optional CLI system packet interfaces.
 - Android uses a separate `VpnService` companion with the same Radmin-compatible protocol and a device-local identity. See `android/README.md`.
 - Apple mobile support requires a Network Extension packet-tunnel target and entitlements. This repository does not yet ship that target.
-- The Windows embedded core and macOS client currently use process-level forwarding. Windows also supports the official system adapter through the existing service backend.
+- The Windows embedded core uses process-level forwarding. Windows also supports the official system adapter through the existing service backend.
 
 ## Compatibility boundary
 
