@@ -109,3 +109,8 @@ jobs:
           name: radminlan-ios-simulator
           path: ios/build/radminlan-ios-simulator.zip
           if-no-files-found: error
+      - name: Compile the iOS device app and Packet Tunnel
+        working-directory: ios
+        run: |
+          ./build.sh device -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO
+          test -d build/device/Build/Products/Release-iphoneos/RadminLAN.app/PlugIns/PacketTunnel.appex
