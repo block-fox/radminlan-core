@@ -43,4 +43,5 @@ try {
     $process.Dispose()
 }
 Copy-Item -LiteralPath $runtime -Destination (Join-Path $build 'wintun.dll') -Force
+Copy-Item -LiteralPath (Join-Path $sdk 'LICENSE.txt') -Destination (Join-Path $build 'WINTUN-LICENSE.txt') -Force
 Write-Output $output

@@ -6,6 +6,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 
 
 # Uses a Linux network namespace or a temporary utun on a disposable macOS runner.
@@ -43,7 +44,7 @@ if not mac and not windows:
     run('ip', 'address', 'add', local + '/24', 'dev', iface)
     run('ip', 'link', 'set', 'dev', iface, 'mtu', '1500', 'up')
 process = subprocess.Popen([helper, iface], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
-watchdog = threading.Timer(35, process.kill)
+watchdog = threading.Timer(60, process.kill)
 watchdog.start()
 try:
     assert read_stream(process.stdout, 4) == b'RLT1'
@@ -53,7 +54,15 @@ try:
         run('ifconfig', iface, 'inet', local, remote, 'netmask', '255.255.255.255', 'mtu', '1500', 'up')
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as app:
         app.settimeout(5)
-        app.bind((local, 31577))
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                app.bind((local, 31577))
+                break
+            except OSError as error:
+                if not windows or error.winerror != 10049 or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.25)
         app.sendto(b'radmin-out', (remote, 31578))
         while True:
             (length,) = struct.unpack('!H', read_stream(process.stdout, 2))

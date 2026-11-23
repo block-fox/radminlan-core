@@ -48,7 +48,10 @@ jobs:
         if: runner.os == 'Windows'
         with:
           name: radminlan-wintun-windows-x64
-          path: build/wintun-native/radminlan-wintun.exe
+          path: |
+            build/wintun-native/radminlan-wintun.exe
+            build/wintun-native/wintun.dll
+            build/wintun-native/WINTUN-LICENSE.txt
           if-no-files-found: error
   android:
     runs-on: ubuntu-latest
@@ -89,3 +92,12 @@ jobs:
       - run: brew install xcodegen
       - working-directory: ios
         run: ./build.sh
+      - working-directory: ios
+        run: |
+          test -d build/Build/Products/Debug-iphonesimulator/RadminLAN.app/PlugIns/PacketTunnel.appex
+          ditto -c -k --keepParent build/Build/Products/Debug-iphonesimulator/RadminLAN.app build/radminlan-ios-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radminlan-ios-simulator
+          path: ios/build/radminlan-ios-simulator.zip
+          if-no-files-found: error
