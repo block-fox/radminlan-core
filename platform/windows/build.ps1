@@ -25,8 +25,22 @@ $visualStudio = & $vcvars -latest -products '*' -requires Microsoft.VisualStudio
 if (-not $visualStudio) { throw 'MSVC build tools are required.' }
 $setup = Join-Path $visualStudio 'VC/Auxiliary/Build/vcvarsall.bat'
 $target = if ($architecture -eq 'arm64') { 'arm64' } else { 'x64' }
-$compile = "`"$setup`" $target >nul && cl /nologo /std:c11 /O2 /W4 /I`"$include`" /Fo`"$object`" /Fe`"$output`" `"$source`""
-& $env:ComSpec /d /s /c ('"' + $compile + '"')
-if ($LASTEXITCODE -ne 0) { throw 'Wintun helper compilation failed.' }
+$compiler = [System.Diagnostics.ProcessStartInfo]::new($env:ComSpec)
+$compiler.UseShellExecute = $false
+$compiler.WorkingDirectory = $build
+$compiler.Environment['RADMINLAN_VCVARS'] = $setup
+$compiler.Environment['RADMINLAN_VC_TARGET'] = $target
+$compiler.Environment['RADMINLAN_WINTUN_INCLUDE'] = $include
+$compiler.Environment['RADMINLAN_WINTUN_SOURCE'] = $source
+$compiler.Environment['RADMINLAN_WINTUN_OBJECT'] = $object
+$compiler.Environment['RADMINLAN_WINTUN_EXE'] = $output
+$compiler.Arguments = '/d /v:off /c call "%RADMINLAN_VCVARS%" %RADMINLAN_VC_TARGET% >nul && cl /nologo /std:c11 /O2 /W4 /I"%RADMINLAN_WINTUN_INCLUDE%" /Fo"%RADMINLAN_WINTUN_OBJECT%" /Fe"%RADMINLAN_WINTUN_EXE%" "%RADMINLAN_WINTUN_SOURCE%"'
+$process = [System.Diagnostics.Process]::Start($compiler)
+try {
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw 'Wintun helper compilation failed.' }
+} finally {
+    $process.Dispose()
+}
 Copy-Item -LiteralPath $runtime -Destination (Join-Path $build 'wintun.dll') -Force
 Write-Output $output
