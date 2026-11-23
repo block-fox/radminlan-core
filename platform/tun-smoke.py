@@ -5,12 +5,14 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 
 
 # Uses a Linux network namespace or a temporary utun on a disposable macOS runner.
 helper = str(Path(sys.argv[1]).resolve(strict=True))
 mac = platform.system() == 'Darwin'
-iface = 'utun70' if mac else 'radminlan0'
+windows = platform.system() == 'Windows'
+iface = 'utun70' if mac else ('RadminLAN-CI' if windows else 'radminlan0')
 local, remote = '26.77.1.1', '26.77.1.2'
 
 
@@ -21,7 +23,8 @@ def run(*args):
 def read_stream(stream, count):
     data = bytearray()
     while len(data) < count:
-        assert select.select([stream], [], [], 5)[0], 'TUN helper did not provide bytes'
+        if not windows:
+            assert select.select([stream], [], [], 5)[0], 'TUN helper did not provide bytes'
         chunk = stream.read(count - len(data))
         assert chunk, 'TUN helper closed early'
         data.extend(chunk)
@@ -35,14 +38,18 @@ def checksum(data):
     return ~value & 0xffff
 
 
-if not mac:
+if not mac and not windows:
     run('ip', 'tuntap', 'add', 'dev', iface, 'mode', 'tun')
     run('ip', 'address', 'add', local + '/24', 'dev', iface)
     run('ip', 'link', 'set', 'dev', iface, 'mtu', '1500', 'up')
 process = subprocess.Popen([helper, iface], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+watchdog = threading.Timer(35, process.kill)
+watchdog.start()
 try:
     assert read_stream(process.stdout, 4) == b'RLT1'
-    if mac:
+    if windows:
+        run('netsh', 'interface', 'ipv4', 'set', 'address', f'name={iface}', 'source=static', f'address={local}', 'mask=255.255.255.0')
+    elif mac:
         run('ifconfig', iface, 'inet', local, remote, 'netmask', '255.255.255.255', 'mtu', '1500', 'up')
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as app:
         app.settimeout(5)
@@ -63,8 +70,9 @@ try:
         assert app.recvfrom(64) == (data, (remote, 31578))
     process.stdin.close()
     assert process.wait(timeout=5) == 0
-    print(('MACOS_UTUN' if mac else 'LINUX_TUN') + '_BIDIRECTIONAL_OK')
+    print(('WINDOWS_WINTUN' if windows else 'MACOS_UTUN' if mac else 'LINUX_TUN') + '_BIDIRECTIONAL_OK')
 finally:
+    watchdog.cancel()
     if process.poll() is None:
         process.kill()
         process.wait(timeout=5)

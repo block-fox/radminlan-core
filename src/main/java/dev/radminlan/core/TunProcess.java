@@ -25,9 +25,15 @@ final class TunProcess implements AutoCloseable {
 
     static TunProcess open(CoreSession session, Path helper, String name) throws IOException, InterruptedException {
         String os = System.getProperty("os.name", "");
-        boolean mac = os.equalsIgnoreCase("Mac OS X");
-        if (!mac && !os.equalsIgnoreCase("Linux")) throw new IOException("The TUN helper requires Linux or macOS");
-        if (!name.matches(mac ? "utun[0-9]{1,5}" : "[A-Za-z0-9_.-]{1,15}")
+        String validName = switch (os) {
+            case "Mac OS X" -> "utun[0-9]{1,5}";
+            case "Linux" -> "[A-Za-z0-9_.-]{1,15}";
+            default -> {
+                if (!os.startsWith("Windows")) throw new IOException("The TUN helper requires Windows, Linux or macOS");
+                yield "[A-Za-z0-9_.-]{1,63}";
+            }
+        };
+        if (!name.matches(validName)
                 || !Files.isRegularFile(helper) || !Files.isExecutable(helper)) {
             throw new IllegalArgumentException("Expected an existing TUN name and an executable helper file");
         }
@@ -96,8 +102,14 @@ final class TunProcess implements AutoCloseable {
     @Override public synchronized void close() {
         if (!closed.compareAndSet(false, true)) return;
         session.detachPacketReceiver(receiver);
-        process.destroyForcibly();
         if (writer != null) writer.interrupt();
+        Thread.ofVirtual().name("radminlan-tun-shutdown").start(() -> {
+            // Let the helper close its own adapter before forcing termination.
+            process.onExit().orTimeout(1200, TimeUnit.MILLISECONDS)
+                    .exceptionally(failure -> { process.destroyForcibly(); return process; });
+            try { process.getOutputStream().close(); }
+            catch (IOException ignored) { }
+        });
         incoming.clear();
     }
 }

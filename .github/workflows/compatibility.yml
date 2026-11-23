@@ -40,6 +40,16 @@ jobs:
           name: radminlan-utun-macos
           path: build/radminlan-utun
           if-no-files-found: error
+      - if: runner.os == 'Windows'
+        run: |
+          ./platform/windows/build.ps1
+          python platform/tun-smoke.py build/wintun-native/radminlan-wintun.exe
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: radminlan-wintun-windows-x64
+          path: build/wintun-native/radminlan-wintun.exe
+          if-no-files-found: error
   android:
     runs-on: ubuntu-latest
     steps:

@@ -50,6 +50,19 @@ sudo ifconfig utun70 inet <local-virtual-ip> <peer-virtual-ip> netmask 255.255.2
 
 The peer route and interface disappear when the helper closes. Add additional host routes only for peers that need system-level access.
 
+## Windows system Wintun
+
+Run `./platform/windows/build.ps1` with MSVC Build Tools available. The script verifies the published Wintun SDK archive and the Windows signature on its DLL. Keep `wintun.dll` beside the executable. Starting Wintun and assigning IPs need an administrator terminal.
+
+Connect the CLI and run `tun RadminLAN /path/to/radminlan-wintun.exe`. Set the new adapter's IPv4 to the address shown by `status` and add individual peer routes through it. Run these commands in PowerShell:
+
+```powershell
+New-NetIPAddress -InterfaceAlias 'RadminLAN' -IPAddress '<local-virtual-ip>' -PrefixLength 32
+New-NetRoute -InterfaceAlias 'RadminLAN' -DestinationPrefix '<peer-virtual-ip>/32' -NextHop '0.0.0.0'
+```
+
+Use `untun` to release the helper. The existing official Radmin adapter remains a separate backend in the Minecraft mod.
+
 ## Minecraft embedding
 
 Build RadminLAN Core first, then build RadminLAN with `RADMIN_CORE_JAR` set to the absolute core JAR path. The mod's `AUTO` backend uses the core on non-Windows platforms and keeps the official named-pipe backend on Windows. `CORE` forces the core, and `WINDOWS` forces the official backend.
@@ -67,7 +80,7 @@ The build verifies the JAR identity and copies only the core classes and its lic
 - Linux and macOS can use the embedded engine for game TCP. Both have optional CLI system packet interfaces.
 - Android uses a separate `VpnService` companion with the same Radmin-compatible protocol and a device-local identity. See `android/README.md`.
 - Apple mobile support requires a Network Extension packet-tunnel target and entitlements. This repository does not yet ship that target.
-- The Windows embedded core uses process-level forwarding. Windows also supports the official system adapter through the existing service backend.
+- Windows has a CLI Wintun system adapter. The embedded core can use process-level forwarding, and the existing service backend uses the official system adapter.
 
 ## Compatibility boundary
 
