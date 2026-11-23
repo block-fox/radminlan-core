@@ -1,0 +1,8 @@
+.gradle/
+build/
+*.log
+.env
+identity.json
+identity.lock
+registration.pending
+modulus.bin

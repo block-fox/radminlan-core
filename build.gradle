@@ -1,0 +1,32 @@
+plugins {
+    id 'application'
+    id 'java-library'
+}
+
+group = 'dev.radminlan'
+version = '0.1.0'
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+application { mainClass = 'dev.radminlan.core.Main' }
+sourceSets.main.java.srcDir 'vendor/openrad/src/main/java'
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 21 }
+
+tasks.named('jar') {
+    manifest.attributes('Main-Class': application.mainClass.get())
+    from('vendor/openrad/LICENSE') { rename { 'LICENSE-OpenRad' }; into 'META-INF' }
+}
+
+repositories { mavenCentral() }
+def junitStandalone = providers.gradleProperty('junitStandalone').getOrNull()
+dependencies {
+    if (junitStandalone != null) {
+        testImplementation files(junitStandalone)
+    } else {
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+    }
+}
+test { useJUnitPlatform() }
