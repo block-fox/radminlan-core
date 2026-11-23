@@ -9,3 +9,4 @@ modulus.bin
 ios/native/target/
 ios/RadminLAN.xcodeproj/
 *.ipa
+network-choices.properties

@@ -63,6 +63,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private final ArrayBlockingQueue<Request> management = new ArrayBlockingQueue<>(16);
     private volatile ManagementView published;
     private final Map<String, Boolean> networkOverrides = new HashMap<>();
+    private Path networkChoicesFile;
     private final ClientConfig config;
     private final Path dataDirectory;
     private final Consumer<String> logger;
@@ -223,6 +224,13 @@ public final class ClientVpnRuntime implements AutoCloseable {
             lockFile = FileChannel.open(identityLock,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
             if (lockFile.tryLock() == null) throw new IOException("OpenRad identity is already in use");
+            networkChoicesFile = identityDirectory.resolve(NetworkChoices.FILE_NAME);
+            networkOverrides.clear();
+            try {
+                networkOverrides.putAll(NetworkChoices.load(networkChoicesFile));
+            } catch (IOException unreadable) {
+                logger.accept("Unable to load saved network choices: " + unreadable.getClass().getSimpleName());
+            }
             workerLocked(coordinator);
         } catch (OverlappingFileLockException inUse) {
             if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
@@ -425,8 +433,10 @@ public final class ClientVpnRuntime implements AutoCloseable {
             peers = peerService;
             Set<String> initialTargets = resolveNetworks(connection, peerService);
             var targets = new LinkedHashSet<>(initialTargets);
+            var joined = connection.membership().networks().values().stream()
+                    .map(Membership.Network::name).collect(java.util.stream.Collectors.toSet());
             for (var entry : networkOverrides.entrySet()) {
-                if (entry.getValue()) targets.add(entry.getKey());
+                if (entry.getValue() && joined.contains(entry.getKey())) targets.add(entry.getKey());
                 else targets.remove(entry.getKey());
             }
             activeNetworkNames = Set.copyOf(targets);
@@ -662,6 +672,11 @@ public final class ClientVpnRuntime implements AutoCloseable {
         if (enabled) selected.add(name);
         else selected.remove(name);
         networkOverrides.put(name, enabled);
+        try {
+            NetworkChoices.save(networkChoicesFile, networkOverrides);
+        } catch (IOException unwritable) {
+            logger.accept("Unable to save network choices: " + unwritable.getClass().getSimpleName());
+        }
         activeNetworkNames = Set.copyOf(selected);
         peerService.selectNetworks(activeNetworkNames);
     }

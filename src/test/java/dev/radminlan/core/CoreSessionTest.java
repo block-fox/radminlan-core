@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.EOFException;
+import java.net.SocketException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -33,7 +34,7 @@ final class CoreSessionTest {
     private static final byte[] GUID = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
     private static final String ID = HexFormat.of().formatHex(GUID);
 
-    @Test void authenticateJoinAndLeaveOnTheSameControlConnection() throws Exception {
+    @Test void authenticatesAndRestoresNetworkChoicesAcrossSessions() throws Exception {
         try (var listener = new ServerSocket(0, 1, InetAddress.getByAddress(new byte[]{127, 0, 0, 1}));
              var session = new CoreSession(profile, List.of(), ignored -> {})) {
             listener.setSoTimeout(8_000);
@@ -45,53 +46,89 @@ final class CoreSessionTest {
             try (var identity = new Identity(OWN_ID, ipv4("26.0.0.1"), "Test", new byte[16], PASSWORD, "127.0.0.1")) {
                 identity.save(identityPath.resolve("identity.json"));
             }
+            byte[] network = tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 1)));
             var served = java.util.concurrent.CompletableFuture.runAsync(() -> {
-                try (var service = SyntheticControlService.authenticate(listener.accept(), 4, OWN_ID, PASSWORD)) {
-                    assertEquals(20, number(fields(service.receive()), TlvCodec.CLIENT_OP));
-                    service.send(server(21));
-                    service.send(concat(server(38), tlv(0x1316, concat(u32(0x01000305, 0x1a000001),
-                            tlv(0x09000305, new byte[16])))));
-                    service.stream().sustain();
-                    byte[] query = next(service, 43);
-                    long catalog = wide(fields(field(fields(query), 0x1332)), 0x02000340);
-                    service.send(concat(server(45), tlv(0x1334, concat(u64(0x02000340, catalog), u64(0x0200030f, 0)))));
-                    byte[] request = next(service, 39);
-                    var join = fields(field(fields(request), 0x131c));
-                    long joinId = wide(join, 0x02000340);
-                    byte[] network = tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 1)));
-                    // An unrelated acknowledgement must not complete the operation.
-                    service.send(joinResult(joinId + 1, network));
-                    service.send(joinResult(joinId, network));
-                    service.send(concat(server(42), tlv(0x131f, tlv(0x131e,
-                            concat(u64(0x020001e1, OWN_ID), tlv(0x0d000309, GUID))))));
-                    var leave = fields(field(fields(next(service, 52)), 0x1319));
-                    long leaveId = wide(leave, 0x02000340);
-                    long sequence = number(leave, 0x0100034a);
-                    service.send(concat(server(37), tlv(0x131a, concat(u64(0x02000340, leaveId),
-                            u32(0x0100030c, 3), u32(0x0100034a, sequence), tlv(0x0d000309, GUID)))));
-                    while (true) service.receive();
-                } catch (EOFException closed) {
-                    // The client closed the attachment after applying the confirmed leave.
+                try {
+                    try (var service = attach(listener, new byte[0])) {
+                        var join = fields(field(fields(next(service, 39)), 0x131c));
+                        long joinId = wide(join, 0x02000340);
+                        // An unrelated acknowledgement must not complete the operation.
+                        service.send(joinResult(joinId + 1, network));
+                        service.send(joinResult(joinId, network));
+                        service.send(concat(server(42), tlv(0x131f, tlv(0x131e,
+                                concat(u64(0x020001e1, OWN_ID), tlv(0x0d000309, GUID))))));
+                        waitForDisconnect(service);
+                    }
+                    try (var service = attach(listener, network)) {
+                        var leave = fields(field(fields(next(service, 52)), 0x1319));
+                        long leaveId = wide(leave, 0x02000340);
+                        long sequence = number(leave, 0x0100034a);
+                        service.send(concat(server(37), tlv(0x131a, concat(u64(0x02000340, leaveId),
+                                u32(0x0100030c, 3), u32(0x0100034a, sequence), tlv(0x0d000309, GUID)))));
+                        waitForDisconnect(service);
+                    }
                 } catch (Exception error) { throw new AssertionError(error); }
             });
             assertFalse(session.manage(Action.JOIN, NETWORK, null).join());
             assertTrue(session.start());
-            long until = System.nanoTime() + Duration.ofSeconds(7).toNanos();
-            while (!session.view().status().phase().equals("CONNECTED") && !served.isDone() && System.nanoTime() < until) {
-                Thread.sleep(20);
-            }
-            if (served.isCompletedExceptionally()) served.join();
-            assertEquals("CONNECTED", session.view().status().phase());
+            awaitConnected(session, served);
             assertTrue(session.manage(Action.JOIN, NETWORK, null).get(5, TimeUnit.SECONDS));
             assertEquals(ID, session.view().networks().getFirst().id());
             assertTrue(session.view().networks().getFirst().enabled());
             assertTrue(session.manage(Action.DISABLE, ID, null).get(3, TimeUnit.SECONDS));
             assertFalse(session.view().networks().getFirst().enabled());
-            assertTrue(session.manage(Action.LEAVE, ID, null).get(5, TimeUnit.SECONDS));
-            assertTrue(session.view().networks().isEmpty());
-            session.stop();
+            session.close();
             assertTrue(session.awaitStopped(Duration.ofSeconds(4)));
+            try (var restarted = new CoreSession(profile, List.of(NETWORK), ignored -> {})) {
+                assertTrue(restarted.start());
+                awaitConnected(restarted, served);
+                assertFalse(restarted.view().networks().getFirst().enabled(), "saved disable wins over the startup network list");
+                assertTrue(restarted.manage(Action.ENABLE, ID, null).get(3, TimeUnit.SECONDS));
+                assertTrue(restarted.view().networks().getFirst().enabled());
+                assertTrue(restarted.manage(Action.LEAVE, ID, null).get(5, TimeUnit.SECONDS));
+                assertTrue(restarted.view().networks().isEmpty());
+                restarted.stop();
+                assertTrue(restarted.awaitStopped(Duration.ofSeconds(4)));
+            }
             served.get(4, TimeUnit.SECONDS);
+        }
+    }
+
+    private static void awaitConnected(CoreSession session, java.util.concurrent.CompletableFuture<Void> served)
+            throws InterruptedException {
+        long until = System.nanoTime() + Duration.ofSeconds(7).toNanos();
+        while (!session.view().status().phase().equals("CONNECTED") && !served.isDone() && System.nanoTime() < until) {
+            Thread.sleep(20);
+        }
+        if (served.isCompletedExceptionally()) served.join();
+        assertEquals("CONNECTED", session.view().status().phase());
+    }
+
+    private static SyntheticControlService.Authenticated attach(ServerSocket listener, byte[] network) throws Exception {
+        var service = SyntheticControlService.authenticate(listener.accept(), 4, OWN_ID, PASSWORD);
+        try {
+            assertEquals(20, number(fields(service.receive()), TlvCodec.CLIENT_OP));
+            service.send(server(21));
+            service.send(concat(server(38), tlv(0x1316, concat(u32(0x01000305, 0x1a000001),
+                    tlv(0x09000305, new byte[16]), network))));
+            service.stream().sustain();
+            byte[] query = next(service, 43);
+            long catalog = wide(fields(field(fields(query), 0x1332)), 0x02000340);
+            service.send(concat(server(45), tlv(0x1334, concat(u64(0x02000340, catalog), u64(0x0200030f, 0)))));
+            return service;
+        } catch (Exception | AssertionError failure) {
+            service.close();
+            throw failure;
+        }
+    }
+
+    private static void waitForDisconnect(SyntheticControlService.Authenticated service) {
+        try {
+            while (true) assertEquals(4, number(fields(service.receive()), TlvCodec.CLIENT_OP));
+        } catch (EOFException | SocketException disconnected) {
+            // Some TCP stacks reset a socket when its owner closes with unread input.
+        } catch (IOException unexpected) {
+            fail("Expected the client to close its control connection", unexpected);
         }
     }
 

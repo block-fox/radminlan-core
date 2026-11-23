@@ -23,7 +23,7 @@ java -jar build\libs\radminlan-core-0.1.0.jar --help
 java -jar build\libs\radminlan-core-0.1.0.jar connect
 ```
 
-The default profile is `.radminlan/core` under the current user’s home directory. `--profile` selects an isolated profile. A coordinator can be configured with `coordinator.properties` and `modulus.bin` in that profile. The CLI uses the official-compatible coordinator by default only after the user explicitly starts `connect`.
+The default profile is `.radminlan/core` under the current user’s home directory. `--profile` selects an isolated profile. A coordinator can be configured with `coordinator.properties` and `modulus.bin` in that profile. The CLI uses the official-compatible coordinator by default only after the user explicitly starts `connect`. Confirmed joins and explicit enable or disable choices are saved for the same profile. On reconnect these choices apply to existing memberships.
 
 ## Linux system TUN
 

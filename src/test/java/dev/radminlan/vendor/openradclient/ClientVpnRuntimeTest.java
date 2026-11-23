@@ -14,6 +14,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
 import java.io.EOFException;
+import java.net.SocketException;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
@@ -78,7 +79,12 @@ class ClientVpnRuntimeTest {
                         assertEquals(4, number(fields(attached.receive()), TlvCodec.CLIENT_OP));
                         attached.send(server(17));
                         heartbeat.countDown();
-                        assertThrows(EOFException.class, attached::receive);
+                        try {
+                            attached.receive();
+                            fail("Expected the client to close its control connection");
+                        } catch (EOFException | SocketException disconnected) {
+                            // A reset is also observable when closing with unread input.
+                        }
                     }
                     return null;
                 });
@@ -116,7 +122,12 @@ class ClientVpnRuntimeTest {
                         try (var attached = attach(listener)) {
                             assertEquals(43, number(fields(attached.receive()), TlvCodec.CLIENT_OP));
                             attached.send(server(16));
-                            assertThrows(EOFException.class, attached::receive);
+                            try {
+                            attached.receive();
+                            fail("Expected the client to close its control connection");
+                        } catch (EOFException | SocketException disconnected) {
+                            // A reset is also observable when closing with unread input.
+                        }
                         }
                     }
                     return null;
@@ -158,7 +169,12 @@ class ClientVpnRuntimeTest {
                         assertEquals(20, number(fields(attached.receive()), TlvCodec.CLIENT_OP));
                         attached.send(concat(server(ServerDisconnect.OPERATION),
                                 u32(ServerDisconnect.REASON_TAG, ServerDisconnect.REASON_REPLACED)));
-                        assertThrows(EOFException.class, attached::receive);
+                        try {
+                            attached.receive();
+                            fail("Expected the client to close its control connection");
+                        } catch (EOFException | SocketException disconnected) {
+                            // A reset is also observable when closing with unread input.
+                        }
                     }
                     return null;
                 });

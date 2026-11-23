@@ -20,6 +20,14 @@ jobs:
       - if: runner.os == 'Windows'
         run: .\gradlew.bat build --no-daemon
       - run: java -jar build/libs/radminlan-core-0.1.0.jar --help
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: radminlan-core-cli
+          path: |
+            build/libs/radminlan-core-0.1.0.jar
+            build/distributions/radminlan-core-0.1.0.zip
+          if-no-files-found: error
       - if: runner.os == 'Linux'
         run: |
           cc -std=c11 -Wall -Wextra -Werror -O2 platform/linux/tun.c -o build/radminlan-tun
