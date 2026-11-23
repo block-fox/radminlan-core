@@ -38,6 +38,10 @@ public final class CoreSession implements AutoCloseable {
         return runtime.manage(ClientVpnRuntime.Action.valueOf(action.name()), target, password);
     }
 
+    public CompletableFuture<Boolean> removeMember(String networkId, long memberId) {
+        return runtime.removeMember(networkId, memberId);
+    }
+
     public OutboundTcpStack.Connection openTcp(Inet4Address peer, int port) throws IOException {
         if (peer == null || peer.getAddress()[0] != 26 || port < 1 || port > 65535) {
             throw new IllegalArgumentException("Expected a virtual IPv4 address and port");

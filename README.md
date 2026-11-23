@@ -5,7 +5,7 @@ This private repository contains the cross-platform Radmin-compatible VPN core u
 ## Current scope
 
 - Java compatibility layer sourced from OpenRad with MIT attribution retained in `vendor/openrad/LICENSE`.
-- Persistent identity, authenticated coordinator session, public catalog, public/private network join, create, leave, delete, enable and disable operations.
+- Persistent identity, authenticated coordinator session, public catalog, public/private network join, create, leave, delete, enable and disable operations, and member removal for network administrators.
 - Direct TCP, reliable UDP and relay peer transport from the upstream-compatible engine.
 - CLI network management and one-use loopback TCP forwarding for Minecraft.
 - No system adapter is required for the CLI or Minecraft integration. The mod forwards virtual `26.x.x.x` game connections through the in-process peer engine.

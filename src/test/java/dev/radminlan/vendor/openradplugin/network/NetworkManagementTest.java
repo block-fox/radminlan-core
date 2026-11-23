@@ -130,4 +130,39 @@ class NetworkManagementTest {
                 () -> NetworkManagement.delete("00".repeat(16), 7, 9));
         assertThrows(IllegalArgumentException.class, () -> NetworkManagement.leave(GUID, 0, 9));
     }
+    @Test
+    void memberRemovalRequiresTheMatchingMemberAndKeepsTheNetwork() {
+        long member = 73, other = 74;
+        byte[] guid = tlv(0x0d000309, HexFormat.of().parseHex(GUID));
+        byte[] target = concat(guid, u64(0x020001e1, member));
+        byte[] alternate = concat(guid, u64(0x020001e1, other));
+        Membership membership = new Membership(12345);
+        membership.snapshot(tlv(0x1316, concat(tlv(0x1315, networkEntry()),
+                memberEntry(guid, member), memberEntry(guid, other))));
+        try (NetworkManagement operation = NetworkManagement.removeMember(GUID, member, 7, 9)) {
+            var request = fields(field(fields(operation.start()), 0x1319));
+            assertEquals(4, number(request, 0x0100030c));
+            assertEquals(member, wide(request, 0x020001e1));
+            assertNull(operation.handle(response(8, 4, 9, target), membership));
+            assertThrows(IllegalArgumentException.class,
+                    () -> operation.handle(response(7, 4, 9, alternate), membership));
+            assertTrue(membership.peers().containsKey(member));
+            assertFalse(operation.handle(response(7, 4, 9, u32(0x010001d2, 42)), membership).success());
+            assertTrue(membership.peers().containsKey(member));
+        }
+        try (NetworkManagement operation = NetworkManagement.removeMember(GUID, member, 8, 10)) {
+            operation.start();
+            assertTrue(operation.handle(response(8, 4, 10, target), membership).success());
+            assertFalse(membership.peers().containsKey(member));
+            assertTrue(membership.peers().containsKey(other));
+            assertTrue(membership.networks().containsKey(GUID));
+        }
+    }
+
+    private static byte[] memberEntry(byte[] guid, long member) {
+        return concat(tlv(0x1317, concat(u64(0x020001e1, member), text(0x03000304, "Test member"),
+                        u32(0x01000305, 0x1a000000 + member))),
+                tlv(0x1318, concat(guid, u64(0x020001e1, member), u32(0x0100030a, 1))));
+    }
+
 }

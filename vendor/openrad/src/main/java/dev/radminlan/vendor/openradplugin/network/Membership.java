@@ -69,7 +69,7 @@ public final class Membership {
         }
     }
 
-    private void removeMember(String id, long rid) {
+    void removeMember(String id, long rid) {
         if (rid == ownRid) {
             removeNetwork(id);
             return;

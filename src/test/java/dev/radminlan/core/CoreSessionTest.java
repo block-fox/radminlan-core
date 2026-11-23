@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(20)
 final class CoreSessionTest {
     @TempDir Path profile;
-    private static final long OWN_ID = 123;
+    private static final long OWN_ID = 123, MEMBER_ID = 124;
     private static final String NETWORK = "Synthetic friends";
     private static final byte[] PASSWORD = "synthetic-control-secret".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] GUID = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
@@ -60,7 +60,17 @@ final class CoreSessionTest {
                                 concat(u64(0x020001e1, OWN_ID), tlv(0x0d000309, GUID))))));
                         waitForDisconnect(service);
                     }
-                    try (var service = attach(listener, network)) {
+                    byte[] member = concat(
+                            tlv(0x1317, concat(u64(0x020001e1, MEMBER_ID), text(0x03000304, "Test member"), u32(0x01000305, 0x1a000002))),
+                            tlv(0x1318, concat(tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID), u32(0x0100030a, 1))));
+                    byte[] ownedNetwork = tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 2)));
+                    try (var service = attach(listener, concat(ownedNetwork, member))) {
+                        var kick = fields(field(fields(next(service, 52)), 0x1319));
+                        assertEquals(4, number(kick, 0x0100030c));
+                        assertEquals(MEMBER_ID, wide(kick, 0x020001e1));
+                        service.send(concat(server(37), tlv(0x131a, concat(u64(0x02000340, wide(kick, 0x02000340)),
+                                u32(0x0100030c, 4), u32(0x0100034a, number(kick, 0x0100034a)),
+                                tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID)))));
                         var leave = fields(field(fields(next(service, 52)), 0x1319));
                         long leaveId = wide(leave, 0x02000340);
                         long sequence = number(leave, 0x0100034a);
@@ -78,6 +88,7 @@ final class CoreSessionTest {
             assertTrue(session.view().networks().getFirst().enabled());
             assertTrue(session.manage(Action.DISABLE, ID, null).get(3, TimeUnit.SECONDS));
             assertFalse(session.view().networks().getFirst().enabled());
+            assertFalse(session.removeMember(ID, MEMBER_ID).get(3, TimeUnit.SECONDS));
             session.close();
             assertTrue(session.awaitStopped(Duration.ofSeconds(4)));
             try (var restarted = new CoreSession(profile, List.of(NETWORK), ignored -> {})) {
@@ -86,6 +97,10 @@ final class CoreSessionTest {
                 assertFalse(restarted.view().networks().getFirst().enabled(), "saved disable wins over the startup network list");
                 assertTrue(restarted.manage(Action.ENABLE, ID, null).get(3, TimeUnit.SECONDS));
                 assertTrue(restarted.view().networks().getFirst().enabled());
+                assertEquals(MEMBER_ID, restarted.view().networks().getFirst().peers().getFirst().id());
+                assertFalse(restarted.removeMember(ID, OWN_ID).get(3, TimeUnit.SECONDS));
+                assertTrue(restarted.removeMember(ID, MEMBER_ID).get(5, TimeUnit.SECONDS));
+                assertTrue(restarted.view().networks().getFirst().peers().isEmpty());
                 assertTrue(restarted.manage(Action.LEAVE, ID, null).get(5, TimeUnit.SECONDS));
                 assertTrue(restarted.view().networks().isEmpty());
                 restarted.stop();

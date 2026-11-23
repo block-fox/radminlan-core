@@ -17,8 +17,8 @@ public final class Main {
     private static final String USAGE = """
             Usage: radminlan-core [--profile DIRECTORY] [--network NAME]... [connect]
             Starts an interactive CLI. Include connect to start the session immediately.
-            Commands: connect, disconnect, status, networks, public, join NAME,
-                      create NAME, leave ID, delete ID, enable ID, disable ID,
+            Commands: connect, disconnect, status, networks, members ID, public, join NAME,
+                      create NAME, leave ID, delete ID, kick ID RID, enable ID, disable ID,
                       forward IP:PORT, tun NAME HELPER, untun, quit.
             Private network passwords are read from the terminal without echo.
             """;
@@ -66,6 +66,10 @@ public final class Main {
                             case "disconnect" -> { closeTun(tun); listener.cancelAll(); session.stop(); }
                             case "status" -> System.out.println(session.view().status());
                             case "networks" -> session.view().networks().forEach(n -> System.out.printf("%s\t%s\t%d members%n", n.id(), n.name(), n.peers().size()));
+                            case "members" -> session.view().networks().stream().filter(n -> n.id().equalsIgnoreCase(target))
+                                    .findFirst().ifPresentOrElse(network -> network.peers().forEach(member ->
+                                            System.out.printf("%s\t%s\t%s%n", Long.toUnsignedString(member.id()), member.name(), member.address())),
+                                            () -> System.out.println("Network not found"));
                             case "public" -> {
                                 if (!session.catalogReady()) System.out.println("Public catalog unavailable");
                                 else session.publicNetworks().forEach(System.out::println);
@@ -88,6 +92,12 @@ public final class Main {
                                 int port = Integer.parseInt(target.substring(separator + 1));
                                 var lease = listener.prepare(ip, port);
                                 System.out.println("127.0.0.1:" + lease.endpoint().getPort() + " (one local connection within 30 seconds)");
+                            }
+                            case "kick" -> {
+                                String[] selection = target.split("\\s+", 2);
+                                if (selection.length != 2) throw new IllegalArgumentException("Expected network ID and member RID");
+                                boolean ok = session.removeMember(selection[0], Long.parseUnsignedLong(selection[1])).get(15, TimeUnit.SECONDS);
+                                System.out.println(ok ? "Member removed" : "Member removal was not confirmed");
                             }
                             case "join", "create", "leave", "delete", "enable", "disable" -> manage(session, command, target);
                             default -> System.out.print(USAGE);

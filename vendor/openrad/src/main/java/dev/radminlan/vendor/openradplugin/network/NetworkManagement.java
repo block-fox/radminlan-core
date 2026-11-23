@@ -10,11 +10,11 @@ import java.util.Arrays;
 import java.util.HexFormat;
 
 /**
- * Correlated private-network creation, leave and delete requests, matching canonical network.rs.
+ * Correlated private-network creation, leave, delete and member removal requests, matching canonical network.rs.
  */
 public final class NetworkManagement implements AutoCloseable {
     private final int action, sequence;
-    private final long id;
+    private final long id, expectedMember;
     private final String expectedName, expectedNetwork;
     private final byte[] request;
     private boolean started, closed, complete;
@@ -25,6 +25,7 @@ public final class NetworkManagement implements AutoCloseable {
             int sequence,
             String expectedName,
             String expectedNetwork,
+            long expectedMember,
             byte[] body) {
         require(id != 0 && sequence > 0, "invalid network request correlation");
         this.action = action;
@@ -32,6 +33,7 @@ public final class NetworkManagement implements AutoCloseable {
         this.sequence = sequence;
         this.expectedName = expectedName;
         this.expectedNetwork = expectedNetwork;
+        this.expectedMember = expectedMember;
         request =
                 concat(
                         op(52),
@@ -71,6 +73,7 @@ public final class NetworkManagement implements AutoCloseable {
                     sequence,
                     name,
                     null,
+                    0,
                     tlv(
                             0x1314,
                             concat(
@@ -85,11 +88,17 @@ public final class NetworkManagement implements AutoCloseable {
     }
 
     public static NetworkManagement leave(String networkId, long id, int sequence) {
-        return new NetworkManagement(3, id, sequence, null, networkId, network(networkId));
+        return new NetworkManagement(3, id, sequence, null, networkId, 0, network(networkId));
     }
 
     public static NetworkManagement delete(String networkId, long id, int sequence) {
-        return new NetworkManagement(7, id, sequence, null, networkId, network(networkId));
+        return new NetworkManagement(7, id, sequence, null, networkId, 0, network(networkId));
+    }
+
+    public static NetworkManagement removeMember(String networkId, long member, long id, int sequence) {
+        require(member != 0, "invalid member ID");
+        return new NetworkManagement(4, id, sequence, null, networkId, member,
+                concat(network(networkId), u64(0x020001e1, member)));
     }
 
     private static byte[] network(String networkId) {
@@ -140,7 +149,12 @@ public final class NetworkManagement implements AutoCloseable {
         } else {
             networkId = guid(field(response, 0x0d000309));
             require(networkId.equalsIgnoreCase(expectedNetwork), "network response ID mismatch");
-            membership.removeNetwork(networkId);
+            if (action == 4) {
+                require(wide(response, 0x020001e1) == expectedMember, "network response member mismatch");
+                membership.removeMember(networkId, expectedMember);
+            } else {
+                membership.removeNetwork(networkId);
+            }
         }
         complete = true;
         return new Result(true, 0, networkId);
