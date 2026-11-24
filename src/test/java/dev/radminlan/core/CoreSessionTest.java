@@ -62,16 +62,14 @@ final class CoreSessionTest {
                     }
                     byte[] member = concat(
                             tlv(0x1317, concat(u64(0x020001e1, MEMBER_ID), text(0x03000304, "Test member"), u32(0x01000305, 0x1a000002))),
-                            tlv(0x1318, concat(tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID), u32(0x0100030a, 1))));
+                            tlv(0x1318, concat(tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID), u32(0x0100030a, 0))));
                     byte[] ownedNetwork = tlv(0x1315, concat(tlv(0x0d000309, GUID), text(0x03000306, NETWORK), u32(0x0100030a, 2)));
                     try (var service = attach(listener, concat(ownedNetwork, member), "Alex renamed")) {
                         confirmRename(service, "Alex renamed");
-                        var kick = fields(field(fields(next(service, 52)), 0x1319));
-                        assertEquals(4, number(kick, 0x0100030c));
-                        assertEquals(MEMBER_ID, wide(kick, 0x020001e1));
-                        service.send(concat(server(37), tlv(0x131a, concat(u64(0x02000340, wide(kick, 0x02000340)),
-                                u32(0x0100030c, 4), u32(0x0100034a, number(kick, 0x0100034a)),
-                                tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID)))));
+                        confirmMemberAction(service, 5, 1);
+                        confirmMemberAction(service, 8, null);
+                        confirmMemberAction(service, 9, null);
+                        confirmMemberAction(service, 4, null);
                         var leave = fields(field(fields(next(service, 52)), 0x1319));
                         long leaveId = wide(leave, 0x02000340);
                         long sequence = number(leave, 0x0100034a);
@@ -102,6 +100,13 @@ final class CoreSessionTest {
                 assertTrue(restarted.view().networks().getFirst().enabled());
                 assertEquals(MEMBER_ID, restarted.view().networks().getFirst().peers().getFirst().id());
                 assertFalse(restarted.removeMember(ID, OWN_ID).get(3, TimeUnit.SECONDS));
+                assertTrue(restarted.manageMember(CoreSession.MemberAction.APPROVE, ID, MEMBER_ID).get(5, TimeUnit.SECONDS));
+                assertEquals(1, restarted.view().networks().getFirst().peers().getFirst().role());
+                assertTrue(restarted.manageMember(CoreSession.MemberAction.GRANT_ADMIN, ID, MEMBER_ID).get(5, TimeUnit.SECONDS));
+                assertEquals(2, restarted.view().networks().getFirst().peers().getFirst().role());
+                assertTrue(restarted.manageMember(CoreSession.MemberAction.REVOKE_ADMIN, ID, MEMBER_ID).get(5, TimeUnit.SECONDS));
+                assertEquals(1, restarted.view().networks().getFirst().peers().getFirst().role());
+                assertTrue(restarted.view().networks().getFirst().enabled());
                 assertTrue(restarted.removeMember(ID, MEMBER_ID).get(5, TimeUnit.SECONDS));
                 assertTrue(restarted.view().networks().getFirst().peers().isEmpty());
                 assertTrue(restarted.manage(Action.LEAVE, ID, null).get(5, TimeUnit.SECONDS));
@@ -202,6 +207,17 @@ final class CoreSessionTest {
             service.close();
             throw failure;
         }
+    }
+
+    private static void confirmMemberAction(SyntheticControlService.Authenticated service, int action, Integer role) throws Exception {
+        var request = fields(field(fields(next(service, 52)), 0x1319));
+        assertEquals(action, number(request, 0x0100030c));
+        assertEquals(MEMBER_ID, wide(request, 0x020001e1));
+        assertArrayEquals(GUID, field(request, 0x0d000309));
+        service.send(concat(server(37), tlv(0x131a, concat(u32(0x0100030c, action),
+                u64(0x02000340, wide(request, 0x02000340)), u32(0x0100034a, number(request, 0x0100034a)),
+                tlv(0x0d000309, GUID), u64(0x020001e1, MEMBER_ID),
+                role == null ? new byte[0] : u32(0x0100030a, role)))));
     }
 
     private static void confirmRename(SyntheticControlService.Authenticated service, String name) throws Exception {

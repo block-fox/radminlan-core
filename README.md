@@ -5,10 +5,10 @@ This private repository contains the cross-platform Radmin-compatible VPN core u
 ## Current scope
 
 - Java compatibility layer sourced from OpenRad with MIT attribution retained in `vendor/openrad/LICENSE`.
-- Persistent identity, authenticated coordinator session, public catalog, public/private network join, create, leave, delete, enable and disable operations, and member removal for network administrators.
+- Persistent identity, authenticated coordinator session, public catalog, public/private network join, create, leave, delete, enable and disable operations, and member removal, join approval, and role changes for network administrators.
 - Direct TCP, reliable UDP and relay peer transport from the upstream-compatible engine.
 - CLI network management and one-use loopback TCP forwarding for Minecraft.
-- No system adapter is required for the CLI or Minecraft integration. The mod forwards virtual `26.x.x.x` game connections through the in-process peer engine.
+- No system adapter is required for the CLI or Minecraft integration. The mod routes virtual `26.x.x.x` game connections through the in-process peer engine and can expose a published LAN world to authenticated peers.
 
 ## Build
 
@@ -19,11 +19,13 @@ For an offline check, pass `-PjunitStandalone=/absolute/path/to/junit-platform-c
 ## CLI
 
 ```powershell
-java -jar build\libs\radminlan-core-0.1.0.jar --help
-java -jar build\libs\radminlan-core-0.1.0.jar connect
+java -jar build\libs\radminlan-core-0.2.0.jar --help
+java -jar build\libs\radminlan-core-0.2.0.jar connect
 ```
 
 The default profile is `.radminlan/core` under the current user’s home directory. `--profile` selects an isolated profile. A coordinator can be configured with `coordinator.properties` and `modulus.bin` in that profile. The CLI uses the official-compatible coordinator by default only after the user explicitly starts `connect`. Confirmed joins and explicit enable or disable choices are saved for the same profile. On reconnect these choices apply to existing memberships.
+
+Use `members NETWORK_ID` to find the member RID. Administrators can run `grant-admin NETWORK_ID RID`, `revoke-admin NETWORK_ID RID`, or `approve NETWORK_ID RID`. Grant and revoke were verified on a temporary network using the official coordinator. Approval has a synthetic protocol test and still needs a live approval request.
 
 ## Linux system TUN
 
@@ -68,7 +70,7 @@ Use `untun` to release the helper. The existing official Radmin adapter remains 
 Build RadminLAN Core first, then build RadminLAN with `RADMIN_CORE_JAR` set to the absolute core JAR path. The mod's `AUTO` backend uses the core on non-Windows platforms and keeps the official named-pipe backend on Windows. `CORE` forces the core, and `WINDOWS` forces the official backend.
 
 ```powershell
-$env:RADMIN_CORE_JAR='D:\工作区\radminlan-core\build\libs\radminlan-core-0.1.0.jar'
+$env:RADMIN_CORE_JAR='D:\工作区\radminlan-core\build\libs\radminlan-core-0.2.0.jar'
 D:\工作区\workspace3\scripts\build-26.3.ps1 -JavaHome 'C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot'
 ```
 

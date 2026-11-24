@@ -54,6 +54,14 @@ public final class Membership {
         return Map.copyOf(peers);
     }
 
+    /** Update an existing member's role after the coordinator confirms the change. */
+    void setRole(String id, long rid, int role) {
+        Peer known = peers.get(rid);
+        if (known != null && known.networks().contains(id)) {
+            roles.computeIfAbsent(id, key -> new HashMap<>()).put(rid, role);
+        }
+    }
+
     public Integer role(String id, long rid) {
         return roles.getOrDefault(id, Map.of()).get(rid);
     }

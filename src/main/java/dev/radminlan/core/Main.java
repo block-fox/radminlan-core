@@ -19,6 +19,7 @@ public final class Main {
             Starts an interactive CLI. Include connect to start the session immediately.
             Commands: connect, disconnect, status, networks, members ID, public, join NAME,
                       create NAME, leave ID, delete ID, kick ID RID, enable ID, disable ID,
+                      approve ID RID, grant-admin ID RID, revoke-admin ID RID,
                       forward IP:PORT, tun NAME HELPER, untun, quit.
             Private network passwords are read from the terminal without echo.
             """;
@@ -93,11 +94,15 @@ public final class Main {
                                 var lease = listener.prepare(ip, port);
                                 System.out.println("127.0.0.1:" + lease.endpoint().getPort() + " (one local connection within 30 seconds)");
                             }
-                            case "kick" -> {
+                            case "kick", "approve", "grant-admin", "revoke-admin" -> {
                                 String[] selection = target.split("\\s+", 2);
                                 if (selection.length != 2) throw new IllegalArgumentException("Expected network ID and member RID");
-                                boolean ok = session.removeMember(selection[0], Long.parseUnsignedLong(selection[1])).get(15, TimeUnit.SECONDS);
-                                System.out.println(ok ? "Member removed" : "Member removal was not confirmed");
+                                long memberId = Long.parseUnsignedLong(selection[1]);
+                                var action = command.equals("kick") ? session.removeMember(selection[0], memberId)
+                                        : session.manageMember(CoreSession.MemberAction.valueOf(command.replace('-', '_')
+                                                .toUpperCase(Locale.ROOT)), selection[0], memberId);
+                                boolean ok = action.get(15, TimeUnit.SECONDS);
+                                System.out.println(ok ? "Member updated" : "Member action was not confirmed");
                             }
                             case "join", "create", "leave", "delete", "enable", "disable" -> manage(session, command, target);
                             default -> System.out.print(USAGE);

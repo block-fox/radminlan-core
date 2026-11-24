@@ -106,6 +106,13 @@ public final class NetworkManagement implements AutoCloseable {
         return new NetworkManagement(RENAME_DEVICE, id, sequence, null, null, 0, text(0x03000304, name));
     }
 
+    public static NetworkManagement changeMemberRole(String networkId, long member, int roleAction,
+                                                       long id, int sequence) {
+        require(member != 0 && (roleAction == 5 || roleAction == 8 || roleAction == 9), "invalid member action");
+        return new NetworkManagement(roleAction, id, sequence, null, networkId, member,
+                concat(network(networkId), u64(0x020001e1, member)));
+    }
+
     private static byte[] network(String networkId) {
         byte[] bytes;
         try {
@@ -135,7 +142,7 @@ public final class NetworkManagement implements AutoCloseable {
         require(number(response, 0x0100030c) == action, "network response action mismatch");
         require(number(response, 0x0100034a) == sequence, "network response context mismatch");
         var error = TlvCodec.optional(response, 0x010001d2);
-        if (error.isPresent()) {
+        if (error.isPresent() && TlvCodec.int32(error.orElseThrow()) != 0) {
             complete = true;
             return new Result(false, TlvCodec.int32(error.orElseThrow()), expectedNetwork);
         }
@@ -156,9 +163,16 @@ public final class NetworkManagement implements AutoCloseable {
         } else {
             networkId = guid(field(response, 0x0d000309));
             require(networkId.equalsIgnoreCase(expectedNetwork), "network response ID mismatch");
-            if (action == 4) {
+            if (expectedMember != 0) {
                 require(wide(response, 0x020001e1) == expectedMember, "network response member mismatch");
-                membership.removeMember(networkId, expectedMember);
+                switch (action) {
+                    case 4 -> membership.removeMember(networkId, expectedMember);
+                    case 5 -> membership.setRole(networkId, expectedMember,
+                            TlvCodec.optional(response, 0x0100030a).map(TlvCodec::int32).orElse(1L).intValue());
+                    case 8 -> membership.setRole(networkId, expectedMember, 2);
+                    case 9 -> membership.setRole(networkId, expectedMember, 1);
+                    default -> throw new IllegalArgumentException("unexpected member action");
+                }
             } else {
                 membership.removeNetwork(networkId);
             }

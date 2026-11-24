@@ -19,6 +19,7 @@ import java.util.function.Consumer;
 /** A single, explicitly started VPN identity shared by the CLI and game adapters. */
 public final class CoreSession implements AutoCloseable {
     public enum Action { JOIN, CREATE, LEAVE, DELETE, ENABLE, DISABLE }
+    public enum MemberAction { APPROVE, GRANT_ADMIN, REVOKE_ADMIN }
 
     private final ClientVpnRuntime runtime;
 
@@ -51,6 +52,11 @@ public final class CoreSession implements AutoCloseable {
 
     public CompletableFuture<Boolean> removeMember(String networkId, long memberId) {
         return runtime.removeMember(networkId, memberId);
+    }
+
+    public CompletableFuture<Boolean> manageMember(MemberAction action, String networkId, long memberId) {
+        if (action == null) return CompletableFuture.completedFuture(false);
+        return runtime.manageMember(ClientVpnRuntime.Action.valueOf(action.name()), networkId, memberId);
     }
 
     public OutboundTcpStack.Connection openTcp(Inet4Address peer, int port) throws IOException {

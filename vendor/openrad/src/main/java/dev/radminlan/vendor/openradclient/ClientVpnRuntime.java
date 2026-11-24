@@ -55,7 +55,13 @@ public final class ClientVpnRuntime implements AutoCloseable {
     public record ManagementView(Snapshot status, List<ManagedNetwork> networks) {
         public ManagementView { networks = List.copyOf(networks); }
     }
-    public enum Action { JOIN, CREATE, LEAVE, DELETE, ENABLE, DISABLE, KICK }
+    public enum Action {
+        JOIN, CREATE, LEAVE, DELETE, ENABLE, DISABLE, KICK, APPROVE, GRANT_ADMIN, REVOKE_ADMIN;
+
+        boolean isMemberAction() {
+            return this == KICK || this == APPROVE || this == GRANT_ADMIN || this == REVOKE_ADMIN;
+        }
+    }
     private record Request(Action action, String target, char[] password, long memberId, CompletableFuture<Boolean> result) {
         void finish(boolean ok) {
             if (password != null) Arrays.fill(password, '\0');
@@ -120,14 +126,19 @@ public final class ClientVpnRuntime implements AutoCloseable {
     }
 
     public CompletableFuture<Boolean> removeMember(String networkId, long memberId) {
-        return enqueue(Action.KICK, networkId, null, memberId);
+        return manageMember(Action.KICK, networkId, memberId);
+    }
+
+    public CompletableFuture<Boolean> manageMember(Action action, String networkId, long memberId) {
+        if (action == null || !action.isMemberAction()) return CompletableFuture.completedFuture(false);
+        return enqueue(action, networkId, null, memberId);
     }
 
     private synchronized CompletableFuture<Boolean> enqueue(Action action, String target, char[] password, long memberId) {
         var result = new CompletableFuture<Boolean>();
         if (stopped.get() || shutdown.get() || !state.phase().equals("CONNECTED") || peers == null || action == null || target == null
                 || target.isBlank() || target.length() > 255 || target.chars().anyMatch(Character::isISOControl)
-                || password != null && password.length > 256 || action == Action.KICK && memberId == 0) {
+                || password != null && password.length > 256 || action.isMemberAction() && memberId == 0) {
             result.complete(false);
             return result;
         }
@@ -726,7 +737,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
             }
         }
         if (existing == null && request.action() != Action.CREATE) return false;
-        if (request.action() == Action.KICK) {
+        if (request.action().isMemberAction()) {
             var member = membership.peers().get(request.memberId());
             if (!Integer.valueOf(2).equals(membership.role(existing.id(), membership.ownRid()))
                     || request.memberId() == membership.ownRid() || member == null || !member.networks().contains(existing.id())) {
@@ -738,6 +749,9 @@ public final class ClientVpnRuntime implements AutoCloseable {
             case LEAVE -> NetworkManagement.leave(existing.id(), id, sequence);
             case DELETE -> NetworkManagement.delete(existing.id(), id, sequence);
             case KICK -> NetworkManagement.removeMember(existing.id(), request.memberId(), id, sequence);
+            case APPROVE -> NetworkManagement.changeMemberRole(existing.id(), request.memberId(), 5, id, sequence);
+            case GRANT_ADMIN -> NetworkManagement.changeMemberRole(existing.id(), request.memberId(), 8, id, sequence);
+            case REVOKE_ADMIN -> NetworkManagement.changeMemberRole(existing.id(), request.memberId(), 9, id, sequence);
             default -> throw new IllegalArgumentException("unknown management action");
         }) {
             session.send(operation.start());
@@ -749,7 +763,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 if (result == null) continue;
                 if (!result.success()) return false;
                 if (request.action() == Action.CREATE) setSelected(peerService, request.target(), true);
-                else if (request.action() != Action.KICK) setSelected(peerService, existing.name(), false);
+                else if (!request.action().isMemberAction()) setSelected(peerService, existing.name(), false);
                 return true;
             }
             return false;
