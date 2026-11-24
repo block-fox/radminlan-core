@@ -174,6 +174,16 @@ public final class PeerChannel implements AutoCloseable {
         return stream.endpoint();
     }
 
+    /** The remote socket address, when this authenticated channel is direct. */
+    public String directAddress() {
+        return directAddress(path, path == Path.RELAY ? null : endpoint());
+    }
+
+    static String directAddress(Path path, InetSocketAddress endpoint) {
+        if (path == Path.RELAY || endpoint == null || endpoint.getAddress() == null) return "";
+        return endpoint.getAddress().getHostAddress();
+    }
+
     @Override
     public void close() throws IOException {
         cipher.close();

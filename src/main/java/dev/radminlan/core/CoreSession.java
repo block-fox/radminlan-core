@@ -24,7 +24,12 @@ public final class CoreSession implements AutoCloseable {
     private final ClientVpnRuntime runtime;
 
     public CoreSession(Path profile, List<String> initialNetworks, Consumer<String> logger) {
-        runtime = new ClientVpnRuntime(new ClientConfig(false, initialNetworks), profile, logger);
+        this(profile, null, initialNetworks, logger);
+    }
+
+    /** Import an existing device identity into a stable profile on its first use. */
+    public CoreSession(Path profile, Path legacyProfile, List<String> initialNetworks, Consumer<String> logger) {
+        runtime = new ClientVpnRuntime(new ClientConfig(false, initialNetworks), profile, legacyProfile, logger);
     }
 
     public boolean start() { return runtime.connect(); }
@@ -58,6 +63,9 @@ public final class CoreSession implements AutoCloseable {
         if (action == null) return CompletableFuture.completedFuture(false);
         return runtime.manageMember(ClientVpnRuntime.Action.valueOf(action.name()), networkId, memberId);
     }
+
+    /** An address observed on a current, authenticated direct peer channel. */
+    public String directPeerAddress(long rid) { return runtime.directPeerAddress(rid); }
 
     /** Measures RTT over an authenticated peer channel. A negative result means no reply. */
     public CompletableFuture<Long> pingPeer(long rid) { return runtime.pingPeer(rid); }

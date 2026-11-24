@@ -118,6 +118,47 @@ final class CoreSessionTest {
         }
     }
 
+    @Test void keepsTheDeviceAddressWhenTheLaunchersHomeDirectoryChanges() throws Exception {
+        try (var listener = new ServerSocket(0, 1, ipv4("127.0.0.1"))) {
+            listener.setSoTimeout(5_000);
+            int port = listener.getLocalPort();
+            Path instanceProfile = profile.resolve("game/config/radminlinker-core");
+            Path oldHomeProfile = profile.resolve("old-home/.radminlan/core");
+            Path newHomeProfile = profile.resolve("new-home/.radminlan/core");
+            for (Path location : List.of(instanceProfile, oldHomeProfile)) {
+                Files.createDirectories(location);
+                Files.writeString(location.resolve("coordinator.properties"), "host=127.0.0.1\nport=" + port);
+                Files.write(location.resolve("modulus.bin"), SyntheticControlService.modulus());
+            }
+            Path oldIdentity = CoordinatorEndpoint.load(oldHomeProfile, "127.0.0.1", port).identityDirectory();
+            try (var identity = new Identity(OWN_ID, ipv4("26.0.0.1"), "Alex", new byte[16], PASSWORD, "127.0.0.1")) {
+                identity.save(oldIdentity.resolve("identity.json"));
+            }
+            var served = java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    for (int launch = 0; launch < 2; launch++) {
+                        try (var service = attach(listener, new byte[0], "Alex")) {
+                            waitForDisconnect(service);
+                        }
+                    }
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+            for (Path launcherHome : List.of(oldHomeProfile, newHomeProfile)) {
+                try (var session = new CoreSession(instanceProfile, launcherHome, List.of(), ignored -> {})) {
+                    assertTrue(session.start());
+                    awaitConnected(session, served);
+                    assertEquals("26.0.0.1", session.view().status().vip());
+                    session.stop();
+                    assertTrue(session.awaitStopped(Duration.ofSeconds(4)));
+                }
+            }
+            served.get(4, TimeUnit.SECONDS);
+            assertTrue(Files.exists(oldIdentity.resolve("identity.json")));
+        }
+    }
+
     @Test void changesAnExistingIdentityNameWhileConnected() throws Exception {
         try (var listener = new ServerSocket(0, 1, ipv4("127.0.0.1"));
              var session = new CoreSession(profile, List.of(), ignored -> {})) {

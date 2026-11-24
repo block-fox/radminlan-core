@@ -74,6 +74,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private Path networkChoicesFile;
     private final ClientConfig config;
     private final Path dataDirectory;
+    private final Path legacyProfile;
     private final Consumer<String> logger;
     private final AtomicBoolean stopped = new AtomicBoolean();
     private final AtomicBoolean shutdown = new AtomicBoolean();
@@ -95,8 +96,13 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private volatile String controlStage = "authenticating";
 
     public ClientVpnRuntime(ClientConfig config, Path dataDirectory, Consumer<String> logger) {
+        this(config, dataDirectory, null, logger);
+    }
+
+    public ClientVpnRuntime(ClientConfig config, Path dataDirectory, Path legacyProfile, Consumer<String> logger) {
         this.config = Objects.requireNonNull(config);
-        this.dataDirectory = Objects.requireNonNull(dataDirectory);
+        this.dataDirectory = Objects.requireNonNull(dataDirectory).toAbsolutePath().normalize();
+        this.legacyProfile = legacyProfile == null ? null : legacyProfile.toAbsolutePath().normalize();
         this.logger = Objects.requireNonNull(logger);
     }
 
@@ -151,6 +157,12 @@ public final class ClientVpnRuntime implements AutoCloseable {
         Request next;
         while ((next = management.poll()) != null) next.finish(false);
     }
+    public String directPeerAddress(long rid) {
+        ClientPeerService current = peers;
+        return current == null || stopped.get() || !state.phase().equals("CONNECTED")
+                ? "" : current.directPeerAddress(rid);
+    }
+
     public CompletableFuture<Long> pingPeer(long rid) {
         ClientPeerService current = peers;
         if (current == null || stopped.get() || !state.phase().equals("CONNECTED"))
@@ -273,6 +285,14 @@ public final class ClientVpnRuntime implements AutoCloseable {
             lockFile = FileChannel.open(identityLock,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
             if (lockFile.tryLock() == null) throw new IOException("OpenRad identity is already in use");
+            try {
+                ProfileIdentityMigration.importIfNeeded(coordinator, legacyProfile);
+            } catch (IOException | OverlappingFileLockException error) {
+                logger.accept("Unable to migrate Radmin identity (" + error.getClass().getSimpleName() + ")");
+                if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
+                        "screen.radminlinker.core.identity_migration_failed");
+                return;
+            }
             networkChoicesFile = identityDirectory.resolve(NetworkChoices.FILE_NAME);
             networkOverrides.clear();
             try {

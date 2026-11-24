@@ -20,7 +20,7 @@ public final class Main {
             Commands: connect, disconnect, status, networks, members ID, public, join NAME,
                       create NAME, leave ID, delete ID, kick ID RID, enable ID, disable ID,
                       approve ID RID, grant-admin ID RID, revoke-admin ID RID,
-                      ping RID, forward IP:PORT, tun NAME HELPER, untun, quit.
+                      ping RID, peer-address RID, forward IP:PORT, tun NAME HELPER, untun, quit.
             Private network passwords are read from the terminal without echo.
             """;
 
@@ -71,6 +71,10 @@ public final class Main {
                                     .findFirst().ifPresentOrElse(network -> network.peers().forEach(member ->
                                             System.out.printf("%s\t%s\t%s%n", Long.toUnsignedString(member.id()), member.name(), member.address())),
                                             () -> System.out.println("Network not found"));
+                            case "peer-address" -> {
+                                String address = session.directPeerAddress(Long.parseUnsignedLong(target));
+                                System.out.println(address.isEmpty() ? "No active direct peer address" : address);
+                            }
                             case "ping" -> {
                                 long latency = session.pingPeer(Long.parseUnsignedLong(target)).get(4, TimeUnit.SECONDS);
                                 System.out.println(latency >= 0 ? latency + " ms" : "Peer did not reply or is not connected");

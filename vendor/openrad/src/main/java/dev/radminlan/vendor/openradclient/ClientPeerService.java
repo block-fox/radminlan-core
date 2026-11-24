@@ -103,6 +103,14 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
             case RELAY -> "Relay";
         };
     }
+    String directPeerAddress(long rid) {
+        PeerWorker worker = workers.get(rid);
+        PeerChannel channel = worker == null ? null : worker.channel;
+        if (channel == null || closed.get() || !worker.authorized()) return "";
+        String address = channel.directAddress();
+        return worker.channel == channel && workers.get(rid) == worker && worker.authorized() ? address : "";
+    }
+
     long latencyMs(long id) {
         PeerWorker worker = workers.get(id);
         return worker == null || worker.channel == null ? -1 : worker.latencyMs;
