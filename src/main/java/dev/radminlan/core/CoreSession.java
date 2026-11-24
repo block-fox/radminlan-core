@@ -59,6 +59,9 @@ public final class CoreSession implements AutoCloseable {
         return runtime.manageMember(ClientVpnRuntime.Action.valueOf(action.name()), networkId, memberId);
     }
 
+    /** Measures RTT over an authenticated peer channel. A negative result means no reply. */
+    public CompletableFuture<Long> pingPeer(long rid) { return runtime.pingPeer(rid); }
+
     public OutboundTcpStack.Connection openTcp(Inet4Address peer, int port) throws IOException {
         if (peer == null || peer.getAddress()[0] != 26 || port < 1 || port > 65535) {
             throw new IllegalArgumentException("Expected a virtual IPv4 address and port");

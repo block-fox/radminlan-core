@@ -20,7 +20,7 @@ public final class Main {
             Commands: connect, disconnect, status, networks, members ID, public, join NAME,
                       create NAME, leave ID, delete ID, kick ID RID, enable ID, disable ID,
                       approve ID RID, grant-admin ID RID, revoke-admin ID RID,
-                      forward IP:PORT, tun NAME HELPER, untun, quit.
+                      ping RID, forward IP:PORT, tun NAME HELPER, untun, quit.
             Private network passwords are read from the terminal without echo.
             """;
 
@@ -71,6 +71,10 @@ public final class Main {
                                     .findFirst().ifPresentOrElse(network -> network.peers().forEach(member ->
                                             System.out.printf("%s\t%s\t%s%n", Long.toUnsignedString(member.id()), member.name(), member.address())),
                                             () -> System.out.println("Network not found"));
+                            case "ping" -> {
+                                long latency = session.pingPeer(Long.parseUnsignedLong(target)).get(4, TimeUnit.SECONDS);
+                                System.out.println(latency >= 0 ? latency + " ms" : "Peer did not reply or is not connected");
+                            }
                             case "public" -> {
                                 if (!session.catalogReady()) System.out.println("Public catalog unavailable");
                                 else session.publicNetworks().forEach(System.out::println);

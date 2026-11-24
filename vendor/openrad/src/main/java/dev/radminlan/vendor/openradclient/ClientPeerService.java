@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -106,6 +107,11 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         PeerWorker worker = workers.get(id);
         return worker == null || worker.channel == null ? -1 : worker.latencyMs;
     }
+    CompletableFuture<Long> pingPeer(long rid) {
+        PeerWorker worker = workers.get(rid);
+        return worker == null ? CompletableFuture.completedFuture(-1L) : worker.ping();
+    }
+
     int connectedCount() { return (int) workers.values().stream().filter(w -> w.channel != null).count(); }
     List<ClientVpnRuntime.LanServer> lanServers() { return lan.snapshot(); }
 
@@ -346,6 +352,16 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
         volatile boolean stopped;
         volatile PeerChannel channel;
         volatile long latencyMs = -1;
+        private final AtomicReference<CompletableFuture<Long>> manualPing = new AtomicReference<>();
+
+        synchronized CompletableFuture<Long> ping() {
+            if (channel == null || stopped || !authorized()) return CompletableFuture.completedFuture(-1L);
+            var pending = manualPing.get();
+            if (pending != null && !pending.isDone()) return pending;
+            var result = new CompletableFuture<Long>().completeOnTimeout(-1L, 3, TimeUnit.SECONDS);
+            manualPing.set(result);
+            return result;
+        }
 
         PeerWorker(PeerAuthorization.Grant grant, IncomingHub.Setup setup, AsyncResourceCloser.Lease cleanup) {
             this.grant = grant;
@@ -391,7 +407,9 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                 }
                 attempts.computeIfPresent(rid, (key, old) -> new Attempt(0, 0, old.lastStarted()));
                 signalChanged();
-                int sequence = 0;
+                int sequence = 0, automaticSequence = 0, manualSequence = 0;
+                long manualSentAt = 0;
+                CompletableFuture<Long> manualInFlight = null;
                 byte[] peerMac = connected.peerMac();
                 long keepalive = System.nanoTime(), lastPacket = System.nanoTime();
                 long pingSent = 0;
@@ -417,9 +435,16 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                     long now = System.nanoTime();
                     if (now >= keepalive && connected.send(TunnelCodec.keepalive(sequence + 1, false))) {
                         if (pingSent != 0) latencyMs = -1;
-                        sequence++;
+                        automaticSequence = ++sequence;
                         pingSent = now;
                         keepalive = now + Duration.ofSeconds(15).toNanos();
+                    }
+                    var requestedPing = manualPing.get();
+                    if (requestedPing != null && !requestedPing.isDone() && requestedPing != manualInFlight
+                            && connected.send(TunnelCodec.keepalive(sequence + 1, false))) {
+                        manualSequence = ++sequence;
+                        manualSentAt = now;
+                        manualInFlight = requestedPing;
                     }
                     // Outbound frames are drained only between reads: poll briefly while traffic
                     // flows so client-to-server packets are not held for a full 20 ms wait.
@@ -430,7 +455,15 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                         lastPacket = System.nanoTime();
                         if (packet instanceof TunnelCodec.Keepalive alive) {
                             if (!alive.reply()) connected.send(TunnelCodec.keepalive(alive.sequence(), true));
-                            else if (pingSent != 0 && alive.sequence() == sequence) {
+                            else if (manualInFlight != null && alive.sequence() == manualSequence) {
+                                long roundTrip = TimeUnit.NANOSECONDS.toMillis(lastPacket - manualSentAt);
+                                if (authorized() && !manualInFlight.isDone()) {
+                                    latencyMs = roundTrip;
+                                    manualInFlight.complete(roundTrip);
+                                }
+                                manualPing.compareAndSet(manualInFlight, null);
+                                manualInFlight = null;
+                            } else if (pingSent != 0 && alive.sequence() == automaticSequence) {
                                 latencyMs = TimeUnit.NANOSECONDS.toMillis(lastPacket - pingSent);
                                 pingSent = 0;
                             }
@@ -485,6 +518,8 @@ final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
                 resources.clear();
                 frames.close();
             }
+            var pendingPing = manualPing.getAndSet(null);
+            if (pendingPing != null) pendingPing.complete(-1L);
             revokeHostedPeer(grant.peer().rid());
             if (setup != null) setup.close();
             cleanup.finish(owned);

@@ -151,6 +151,13 @@ public final class ClientVpnRuntime implements AutoCloseable {
         Request next;
         while ((next = management.poll()) != null) next.finish(false);
     }
+    public CompletableFuture<Long> pingPeer(long rid) {
+        ClientPeerService current = peers;
+        if (current == null || stopped.get() || !state.phase().equals("CONNECTED"))
+            return CompletableFuture.completedFuture(-1L);
+        return current.pingPeer(rid);
+    }
+
     public CatalogSnapshot minecraftCatalog() { return catalog; }
 
     public List<LanServer> lanServers() {
